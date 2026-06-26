@@ -1,10 +1,10 @@
 import type {
-  BucketProvisionOptions,
-  CreditBucket,
-  CreditStore,
-  DeductResult,
-  LedgerEntry,
-  PaginatedLedger,
+  UsageBucketProvisionOptions,
+  UsageBucket,
+  UsageStore,
+  UsageDeductResult,
+  UsageLedgerEntry,
+  UsagePaginatedLedger,
 } from "./types";
 
 function generateId(): string {
@@ -12,15 +12,15 @@ function generateId(): string {
 }
 
 /**
- * In-memory implementation of CreditStore.
+ * In-memory implementation of UsageStore.
  * Useful for testing and prototyping. Data is lost when the process exits.
  */
-export class MemoryStore implements CreditStore {
-  private buckets = new Map<string, CreditBucket>();
+export class MemoryStore implements UsageStore {
+  private buckets = new Map<string, UsageBucket>();
   private bucketsByOwner = new Map<string, string>();
-  private ledger = new Map<string, LedgerEntry[]>();
+  private ledger = new Map<string, UsageLedgerEntry[]>();
 
-  async getBucket(ownerId: string): Promise<CreditBucket | null> {
+  async getBucket(ownerId: string): Promise<UsageBucket | null> {
     const bucketId = this.bucketsByOwner.get(ownerId);
     if (!bucketId) return null;
     return this.buckets.get(bucketId) ?? null;
@@ -28,20 +28,20 @@ export class MemoryStore implements CreditStore {
 
   async createBucket(
     ownerId: string,
-    options: BucketProvisionOptions,
-  ): Promise<CreditBucket> {
+    options: UsageBucketProvisionOptions,
+  ): Promise<UsageBucket> {
     if (this.bucketsByOwner.has(ownerId)) {
       throw new Error(
-        `Credit bucket already exists for owner "${ownerId}"`,
+        `Usage bucket already exists for owner "${ownerId}"`,
       );
     }
 
     const now = Date.now();
-    const bucket: CreditBucket = {
+    const bucket: UsageBucket = {
       id: generateId(),
       ownerId,
-      creditsRemaining: options.creditsLimit,
-      creditsLimit: options.creditsLimit,
+      usageRemaining: options.usageLimit,
+      usageLimit: options.usageLimit,
       windowStart: now,
       windowDurationMs: options.windowDurationMs,
       totalConsumed: 0,
@@ -61,22 +61,22 @@ export class MemoryStore implements CreditStore {
     bucketId: string,
     updates: Partial<
       Pick<
-        CreditBucket,
-        | "creditsRemaining"
-        | "creditsLimit"
+        UsageBucket,
+        | "usageRemaining"
+        | "usageLimit"
         | "windowStart"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"
       >
     >,
-  ): Promise<CreditBucket> {
+  ): Promise<UsageBucket> {
     const bucket = this.buckets.get(bucketId);
     if (!bucket) {
-      throw new Error(`Credit bucket "${bucketId}" not found`);
+      throw new Error(`Usage bucket "${bucketId}" not found`);
     }
 
-    const updated: CreditBucket = {
+    const updated: UsageBucket = {
       ...bucket,
       ...updates,
       updatedAt: updates.updatedAt ?? Date.now(),
@@ -92,15 +92,15 @@ export class MemoryStore implements CreditStore {
     amount: number,
     reason: string,
     metadata?: Record<string, unknown>,
-  ): Promise<DeductResult> {
+  ): Promise<UsageDeductResult> {
     const bucket = this.buckets.get(bucketId);
     if (!bucket) {
-      throw new Error(`Credit bucket "${bucketId}" not found`);
+      throw new Error(`Usage bucket "${bucketId}" not found`);
     }
 
     const now = Date.now();
 
-    const entry: LedgerEntry = {
+    const entry: UsageLedgerEntry = {
       id: generateId(),
       bucketId,
       ownerId,
@@ -111,10 +111,10 @@ export class MemoryStore implements CreditStore {
     };
 
     // Update the bucket
-    const remaining = bucket.creditsRemaining - amount;
-    const updated: CreditBucket = {
+    const remaining = bucket.usageRemaining - amount;
+    const updated: UsageBucket = {
       ...bucket,
-      creditsRemaining: remaining,
+      usageRemaining: remaining,
       totalConsumed: bucket.totalConsumed + amount,
       lastConsumedAt: now,
       updatedAt: now,
@@ -137,7 +137,7 @@ export class MemoryStore implements CreditStore {
     bucketId: string,
     cursor?: string,
     limit = 20,
-  ): Promise<PaginatedLedger> {
+  ): Promise<UsagePaginatedLedger> {
     const entries = this.ledger.get(bucketId) ?? [];
 
     // Reverse to get newest first (entries are appended in insertion order)

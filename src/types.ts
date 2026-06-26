@@ -1,19 +1,19 @@
-export type CreditBucket = {
+export type UsageBucket = {
   /** Unique identifier for the bucket */
   id: string;
   /** Identifier for the owner of this bucket (e.g., user ID, member ID) */
   ownerId: string;
-  /** Number of credits currently remaining */
-  creditsRemaining: number;
-  /** Maximum credits allowed in this bucket */
-  creditsLimit: number;
+  /** Number of usage units currently remaining */
+  usageRemaining: number;
+  /** Maximum usage units allowed in this bucket */
+  usageLimit: number;
   /** Start of the current rolling window (epoch ms) */
   windowStart: number;
   /** Duration of the rolling window in milliseconds */
   windowDurationMs: number;
-  /** Total credits consumed over the lifetime of this bucket */
+  /** Total usage units consumed over the lifetime of this bucket */
   totalConsumed: number;
-  /** Timestamp of the last credit deduction (epoch ms), or null if never consumed */
+  /** Timestamp of the last usage deduction (epoch ms), or null if never consumed */
   lastConsumedAt: number | null;
   /** Timestamp when the bucket was created (epoch ms) */
   createdAt: number;
@@ -21,14 +21,14 @@ export type CreditBucket = {
   updatedAt: number;
 };
 
-export type LedgerEntry = {
+export type UsageLedgerEntry = {
   /** Unique identifier for this ledger entry */
   id: string;
   /** ID of the bucket this entry belongs to */
   bucketId: string;
-  /** ID of the owner who consumed the credits */
+  /** ID of the owner who consumed the usage */
   ownerId: string;
-  /** Number of credits consumed (positive integer) */
+  /** Number of usage units consumed (positive integer) */
   amount: number;
   /** Reason for the deduction (e.g., 'transcribe', 'post-process') */
   reason: string;
@@ -38,23 +38,23 @@ export type LedgerEntry = {
   createdAt: number;
 };
 
-export type CreditStatus = {
-  /** Credits currently remaining */
+export type UsageStatus = {
+  /** Usage units currently remaining */
   remaining: number;
-  /** Maximum credits for this bucket */
+  /** Maximum usage units for this bucket */
   limit: number;
-  /** Whether the bucket has credits remaining */
-  hasCredits: boolean;
+  /** Whether the bucket has usage remaining */
+  hasUsage: boolean;
   /** ISO timestamp when the current window resets */
   resetsAt: string;
 };
 
-export type BalanceInfo = {
-  /** Credits currently remaining */
+export type UsageBalanceInfo = {
+  /** Usage units currently remaining */
   remaining: number;
-  /** Maximum credits for this bucket */
+  /** Maximum usage units for this bucket */
   limit: number;
-  /** Total credits consumed in the current window */
+  /** Total usage units consumed in the current window */
   totalConsumed: number;
   /** ISO timestamp of the current window start */
   windowStart: string;
@@ -62,71 +62,71 @@ export type BalanceInfo = {
   resetsAt: string;
 };
 
-export type DeductResult = {
+export type UsageDeductResult = {
   /** Whether the deduction was successful */
   success: boolean;
-  /** Credits remaining after deduction */
+  /** Usage units remaining after deduction */
   remaining: number;
   /** The ledger entry created for this deduction */
-  entry: LedgerEntry;
+  entry: UsageLedgerEntry;
 };
 
-export type PaginatedLedger = {
+export type UsagePaginatedLedger = {
   /** Ledger entries for the current page */
-  entries: LedgerEntry[];
+  entries: UsageLedgerEntry[];
   /** Cursor for the next page, or null if no more entries */
   nextCursor: string | null;
 };
 
-export type BucketProvisionOptions = {
-  /** Maximum credits for the bucket */
-  creditsLimit: number;
+export type UsageBucketProvisionOptions = {
+  /** Maximum usage units for the bucket */
+  usageLimit: number;
   /** Duration of the rolling window in milliseconds */
   windowDurationMs: number;
 };
 
 /**
- * Storage adapter interface for credit data.
+ * Storage adapter interface for usage data.
  * Implement this interface to use any database backend.
  */
-export interface CreditStore {
+export interface UsageStore {
   /**
-   * Get a credit bucket by owner ID.
+   * Get a usage bucket by owner ID.
    * Returns null if no bucket exists for this owner.
    */
-  getBucket(ownerId: string): Promise<CreditBucket | null>;
+  getBucket(ownerId: string): Promise<UsageBucket | null>;
 
   /**
-   * Create a new credit bucket for an owner.
+   * Create a new usage bucket for an owner.
    * Should throw if a bucket already exists for this owner.
    */
   createBucket(
     ownerId: string,
-    options: BucketProvisionOptions,
-  ): Promise<CreditBucket>;
+    options: UsageBucketProvisionOptions,
+  ): Promise<UsageBucket>;
 
   /**
-   * Update a credit bucket.
+   * Update a usage bucket.
    * Only the fields present in `updates` should be modified.
    */
   updateBucket(
     bucketId: string,
     updates: Partial<
       Pick<
-        CreditBucket,
-        | "creditsRemaining"
-        | "creditsLimit"
+        UsageBucket,
+        | "usageRemaining"
+        | "usageLimit"
         | "windowStart"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"
       >
     >,
-  ): Promise<CreditBucket>;
+  ): Promise<UsageBucket>;
 
   /**
    * Record a deduction in the ledger and update the bucket atomically.
-   * Should decrement `creditsRemaining`, increment `totalConsumed`,
+   * Should decrement `usageRemaining`, increment `totalConsumed`,
    * and insert a ledger entry in a single transaction.
    */
   deduct(
@@ -135,7 +135,7 @@ export interface CreditStore {
     amount: number,
     reason: string,
     metadata?: Record<string, unknown>,
-  ): Promise<DeductResult>;
+  ): Promise<UsageDeductResult>;
 
   /**
    * Get paginated ledger entries for a bucket.
@@ -145,14 +145,14 @@ export interface CreditStore {
     bucketId: string,
     cursor?: string,
     limit?: number,
-  ): Promise<PaginatedLedger>;
+  ): Promise<UsagePaginatedLedger>;
 }
 
-export type CreditManagerConfig = {
+export type UsageManagerConfig = {
   /** The storage adapter to use */
-  store: CreditStore;
-  /** Default credit limit for new buckets (default: 1000) */
-  defaultCredits?: number;
+  store: UsageStore;
+  /** Default usage limit for new buckets (default: 1000) */
+  defaultUsage?: number;
   /** Default window duration in milliseconds (default: 30 days) */
   defaultWindowMs?: number;
   /**

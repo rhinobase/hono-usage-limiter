@@ -1,44 +1,44 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { CreditManager } from "./manager";
-import type { CreditManagerConfig } from "./types";
+import { UsageManager } from "./manager";
+import type { UsageManagerConfig } from "./types";
 
-export type CreditEnv = {
+export type UsageEnv = {
   Variables: {
-    credit: CreditManager;
+    usage: UsageManager;
   };
 };
 
 /**
- * Hono middleware that injects a CreditManager instance onto the context.
+ * Hono middleware that injects a UsageManager instance onto the context.
  *
  * Usage:
  * ```ts
- * import { creditManager } from "hono-usage-limiter";
+ * import { usageManager } from "hono-usage-limiter";
  * import { MemoryStore } from "hono-usage-limiter/memory";
  *
  * const app = new Hono();
  *
- * app.use(creditManager({
+ * app.use(usageManager({
  *   store: new MemoryStore(),
  *   keyGenerator: (c) => c.get("userId"),
  * }));
  *
  * app.get("/balance", async (c) => {
- *   const balance = await c.get("credit").getBalance();
+ *   const balance = await c.get("usage").getBalance();
  *   return c.json(balance);
  * });
  * ```
  */
-export function creditManager(
-  config: CreditManagerConfig,
-): MiddlewareHandler<CreditEnv> {
+export function usageManager(
+  config: UsageManagerConfig,
+): MiddlewareHandler<UsageEnv> {
   const { keyGenerator, ...managerConfig } = config;
 
   return async (c, next) => {
     const ownerId = await keyGenerator(c);
-    const manager = new CreditManager(ownerId, managerConfig);
+    const manager = new UsageManager(ownerId, managerConfig);
 
-    c.set("credit", manager);
+    c.set("usage", manager);
 
     await next();
   };

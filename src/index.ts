@@ -1,14 +1,14 @@
-export { creditManager } from "./middleware";
-export { CreditManager } from "./manager";
-export type { CreditEnv } from "./middleware";
+export { usageManager } from "./middleware";
+export { UsageManager } from "./manager";
+export type { UsageEnv } from "./middleware";
 export type {
-  BalanceInfo,
-  BucketProvisionOptions,
-  CreditBucket,
-  CreditManagerConfig,
-  CreditStatus,
-  CreditStore,
-  DeductResult,
-  LedgerEntry,
-  PaginatedLedger,
+  UsageBalanceInfo,
+  UsageBucketProvisionOptions,
+  UsageBucket,
+  UsageManagerConfig,
+  UsageStatus,
+  UsageStore,
+  UsageDeductResult,
+  UsageLedgerEntry,
+  UsagePaginatedLedger,
 } from "./types";

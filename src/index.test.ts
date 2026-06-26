@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it, beforeEach } from "vitest";
-import { creditManager, type CreditEnv } from "./middleware";
-import { CreditManager } from "./manager";
+import { usageManager, type UsageEnv } from "./middleware";
+import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
 
 describe("MemoryStore", () => {
@@ -18,68 +18,68 @@ describe("MemoryStore", () => {
 
   it("should create a bucket", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 500,
+      usageLimit: 500,
       windowDurationMs: 1000 * 60 * 60,
     });
 
     expect(bucket.ownerId).toBe("user-1");
-    expect(bucket.creditsRemaining).toBe(500);
-    expect(bucket.creditsLimit).toBe(500);
+    expect(bucket.usageRemaining).toBe(500);
+    expect(bucket.usageLimit).toBe(500);
     expect(bucket.totalConsumed).toBe(0);
     expect(bucket.lastConsumedAt).toBeNull();
   });
 
   it("should throw when creating a duplicate bucket", async () => {
     await store.createBucket("user-1", {
-      creditsLimit: 500,
+      usageLimit: 500,
       windowDurationMs: 1000,
     });
 
     await expect(
       store.createBucket("user-1", {
-        creditsLimit: 500,
+        usageLimit: 500,
         windowDurationMs: 1000,
       }),
-    ).rejects.toThrow('Credit bucket already exists for owner "user-1"');
+    ).rejects.toThrow('Usage bucket already exists for owner "user-1"');
   });
 
   it("should get a bucket by owner ID", async () => {
     await store.createBucket("user-1", {
-      creditsLimit: 1000,
+      usageLimit: 1000,
       windowDurationMs: 1000,
     });
 
     const bucket = await store.getBucket("user-1");
     expect(bucket).not.toBeNull();
     expect(bucket?.ownerId).toBe("user-1");
-    expect(bucket?.creditsRemaining).toBe(1000);
+    expect(bucket?.usageRemaining).toBe(1000);
   });
 
   it("should update a bucket", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 1000,
+      usageLimit: 1000,
       windowDurationMs: 1000,
     });
 
     const updated = await store.updateBucket(bucket.id, {
-      creditsRemaining: 800,
+      usageRemaining: 800,
       totalConsumed: 200,
     });
 
-    expect(updated.creditsRemaining).toBe(800);
+    expect(updated.usageRemaining).toBe(800);
     expect(updated.totalConsumed).toBe(200);
-    expect(updated.creditsLimit).toBe(1000);
+    expect(updated.usageLimit).toBe(1000);
   });
 
   it("should throw when updating a non-existent bucket", async () => {
     await expect(
-      store.updateBucket("unknown", { creditsRemaining: 0 }),
-    ).rejects.toThrow('Credit bucket "unknown" not found');
+      store.updateBucket("unknown", { usageRemaining: 0 }),
+    ).rejects.toThrow('Usage bucket "unknown" not found');
   });
 
-  it("should deduct credits and create a ledger entry", async () => {
+  it("should deduct usage and create a ledger entry", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 1000,
+      usageLimit: 1000,
       windowDurationMs: 1000,
     });
 
@@ -100,7 +100,7 @@ describe("MemoryStore", () => {
 
   it("should allow going negative", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 10,
+      usageLimit: 10,
       windowDurationMs: 1000,
     });
 
@@ -117,7 +117,7 @@ describe("MemoryStore", () => {
 
   it("should return paginated ledger entries", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 1000,
+      usageLimit: 1000,
       windowDurationMs: 1000,
     });
 
@@ -152,7 +152,7 @@ describe("MemoryStore", () => {
 
   it("should return ledger entries newest first", async () => {
     const bucket = await store.createBucket("user-1", {
-      creditsLimit: 1000,
+      usageLimit: 1000,
       windowDurationMs: 1000,
     });
 
@@ -167,7 +167,7 @@ describe("MemoryStore", () => {
   });
 });
 
-describe("CreditManager", () => {
+describe("UsageManager", () => {
   let store: MemoryStore;
 
   beforeEach(() => {
@@ -175,33 +175,33 @@ describe("CreditManager", () => {
   });
 
   it("should auto-provision a bucket on check()", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 500,
+      defaultUsage: 500,
       defaultWindowMs: 1000 * 60 * 60,
     });
 
     const status = await manager.check();
     expect(status.remaining).toBe(500);
     expect(status.limit).toBe(500);
-    expect(status.hasCredits).toBe(true);
+    expect(status.hasUsage).toBe(true);
   });
 
   it("should throw on check() if autoProvision is false and no bucket exists", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
       autoProvision: false,
     });
 
     await expect(manager.check()).rejects.toThrow(
-      'No credit bucket found for owner "user-1"',
+      'No usage bucket found for owner "user-1"',
     );
   });
 
-  it("should deduct credits", async () => {
-    const manager = new CreditManager("user-1", {
+  it("should deduct usage", async () => {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 100,
+      defaultUsage: 100,
     });
 
     // Trigger auto-provision
@@ -219,9 +219,9 @@ describe("CreditManager", () => {
   });
 
   it("should return full balance info", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 1000,
+      defaultUsage: 1000,
     });
 
     await manager.deduct(150, "transcribe");
@@ -235,9 +235,9 @@ describe("CreditManager", () => {
   });
 
   it("should return ledger history", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 1000,
+      defaultUsage: 1000,
     });
 
     await manager.deduct(10, "transcribe");
@@ -250,9 +250,9 @@ describe("CreditManager", () => {
   });
 
   it("should reset the bucket", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 1000,
+      defaultUsage: 1000,
     });
 
     await manager.deduct(500, "transcribe");
@@ -267,21 +267,21 @@ describe("CreditManager", () => {
   });
 
   it("should provision a new bucket with custom settings", async () => {
-    const manager = new CreditManager("user-1", { store });
+    const manager = new UsageManager("user-1", { store });
 
     const bucket = await manager.provision({
-      creditsLimit: 5000,
+      usageLimit: 5000,
       windowDurationMs: 30 * 24 * 60 * 60 * 1000,
     });
 
-    expect(bucket.creditsLimit).toBe(5000);
-    expect(bucket.creditsRemaining).toBe(5000);
+    expect(bucket.usageLimit).toBe(5000);
+    expect(bucket.usageRemaining).toBe(5000);
   });
 
   it("should update an existing bucket via provision()", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 1000,
+      defaultUsage: 1000,
     });
 
     // Create initial bucket
@@ -290,38 +290,38 @@ describe("CreditManager", () => {
 
     // Upgrade plan
     const bucket = await manager.provision({
-      creditsLimit: 5000,
+      usageLimit: 5000,
       windowDurationMs: 30 * 24 * 60 * 60 * 1000,
       resetRemaining: true,
     });
 
-    expect(bucket.creditsLimit).toBe(5000);
-    expect(bucket.creditsRemaining).toBe(5000);
+    expect(bucket.usageLimit).toBe(5000);
+    expect(bucket.usageRemaining).toBe(5000);
   });
 
   it("should update limit without resetting remaining", async () => {
-    const manager = new CreditManager("user-1", {
+    const manager = new UsageManager("user-1", {
       store,
-      defaultCredits: 1000,
+      defaultUsage: 1000,
     });
 
     await manager.check();
     await manager.deduct(200, "transcribe");
 
     const bucket = await manager.provision({
-      creditsLimit: 5000,
+      usageLimit: 5000,
       windowDurationMs: 30 * 24 * 60 * 60 * 1000,
     });
 
-    expect(bucket.creditsLimit).toBe(5000);
-    expect(bucket.creditsRemaining).toBe(800);
+    expect(bucket.usageLimit).toBe(5000);
+    expect(bucket.usageRemaining).toBe(800);
   });
 });
 
-describe("creditManager middleware", () => {
-  it("should inject CreditManager onto context", async () => {
+describe("usageManager middleware", () => {
+  it("should inject UsageManager onto context", async () => {
     const store = new MemoryStore();
-    const app = new Hono<CreditEnv & { Variables: { userId: string } }>();
+    const app = new Hono<UsageEnv & { Variables: { userId: string } }>();
 
     app.use(async (c, next) => {
       c.set("userId", "user-1");
@@ -329,16 +329,16 @@ describe("creditManager middleware", () => {
     });
 
     app.use(
-      creditManager({
+      usageManager({
         store,
-        defaultCredits: 500,
+        defaultUsage: 500,
         keyGenerator: (c) =>
           (c as { get: (key: string) => string }).get("userId"),
       }),
     );
 
     app.get("/balance", async (c) => {
-      const balance = await c.get("credit").getBalance();
+      const balance = await c.get("usage").getBalance();
       return c.json(balance);
     });
 
@@ -350,9 +350,9 @@ describe("creditManager middleware", () => {
     expect(body.limit).toBe(500);
   });
 
-  it("should support deducting credits via context", async () => {
+  it("should support deducting usage via context", async () => {
     const store = new MemoryStore();
-    const app = new Hono<CreditEnv & { Variables: { userId: string } }>();
+    const app = new Hono<UsageEnv & { Variables: { userId: string } }>();
 
     app.use(async (c, next) => {
       c.set("userId", "user-1");
@@ -360,23 +360,23 @@ describe("creditManager middleware", () => {
     });
 
     app.use(
-      creditManager({
+      usageManager({
         store,
-        defaultCredits: 100,
+        defaultUsage: 100,
         keyGenerator: (c) =>
           (c as { get: (key: string) => string }).get("userId"),
       }),
     );
 
     app.post("/consume", async (c) => {
-      const credit = c.get("credit");
+      const usage = c.get("usage");
 
-      const status = await credit.check();
-      if (!status.hasCredits) {
-        return c.json({ error: "No credits" }, 429);
+      const status = await usage.check();
+      if (!status.hasUsage) {
+        return c.json({ error: "Usage limit exceeded" }, 429);
       }
 
-      const result = await credit.deduct(30, "transcribe", {
+      const result = await usage.deduct(30, "transcribe", {
         audioDurationSeconds: 30,
       });
 

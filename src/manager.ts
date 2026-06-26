@@ -1,31 +1,31 @@
 import type {
-  BalanceInfo,
-  BucketProvisionOptions,
-  CreditBucket,
-  CreditManagerConfig,
-  CreditStatus,
-  CreditStore,
-  DeductResult,
-  PaginatedLedger,
+  UsageBalanceInfo,
+  UsageBucketProvisionOptions,
+  UsageBucket,
+  UsageManagerConfig,
+  UsageStatus,
+  UsageStore,
+  UsageDeductResult,
+  UsagePaginatedLedger,
 } from "./types";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-export class CreditManager {
-  private store: CreditStore;
-  private defaultCredits: number;
+export class UsageManager {
+  private store: UsageStore;
+  private defaultUsage: number;
   private defaultWindowMs: number;
   private autoProvision: boolean;
-  private bucket: CreditBucket | null = null;
+  private bucket: UsageBucket | null = null;
   private ownerId: string;
 
   constructor(
     ownerId: string,
-    config: Omit<CreditManagerConfig, "keyGenerator">,
+    config: Omit<UsageManagerConfig, "keyGenerator">,
   ) {
     this.ownerId = ownerId;
     this.store = config.store;
-    this.defaultCredits = config.defaultCredits ?? 1000;
+    this.defaultUsage = config.defaultUsage ?? 1000;
     this.defaultWindowMs = config.defaultWindowMs ?? THIRTY_DAYS_MS;
     this.autoProvision = config.autoProvision ?? true;
   }
@@ -34,17 +34,17 @@ export class CreditManager {
    * Ensures the bucket is loaded and the window is current.
    * If the bucket doesn't exist and autoProvision is enabled, creates one.
    */
-  private async resolveBucket(): Promise<CreditBucket> {
+  private async resolveBucket(): Promise<UsageBucket> {
     if (!this.bucket) {
       this.bucket = await this.store.getBucket(this.ownerId);
     }
 
     if (!this.bucket) {
       if (!this.autoProvision) {
-        throw new Error(`No credit bucket found for owner "${this.ownerId}"`);
+        throw new Error(`No usage bucket found for owner "${this.ownerId}"`);
       }
       this.bucket = await this.store.createBucket(this.ownerId, {
-        creditsLimit: this.defaultCredits,
+        usageLimit: this.defaultUsage,
         windowDurationMs: this.defaultWindowMs,
       });
     }
@@ -54,7 +54,7 @@ export class CreditManager {
       this.bucket.windowStart + this.bucket.windowDurationMs;
     if (Date.now() >= windowEnd) {
       this.bucket = await this.store.updateBucket(this.bucket.id, {
-        creditsRemaining: this.bucket.creditsLimit,
+        usageRemaining: this.bucket.usageLimit,
         windowStart: Date.now(),
         totalConsumed: 0,
         updatedAt: Date.now(),
@@ -65,32 +65,32 @@ export class CreditManager {
   }
 
   /**
-   * Check current credit status.
-   * Returns remaining credits, limit, and whether the owner has credits.
+   * Check current usage status.
+   * Returns remaining usage, limit, and whether the owner has usage remaining.
    */
-  async check(): Promise<CreditStatus> {
+  async check(): Promise<UsageStatus> {
     const bucket = await this.resolveBucket();
     const resetsAt = new Date(
       bucket.windowStart + bucket.windowDurationMs,
     ).toISOString();
 
     return {
-      remaining: bucket.creditsRemaining,
-      limit: bucket.creditsLimit,
-      hasCredits: bucket.creditsRemaining > 0,
+      remaining: bucket.usageRemaining,
+      limit: bucket.usageLimit,
+      hasUsage: bucket.usageRemaining > 0,
       resetsAt,
     };
   }
 
   /**
-   * Deduct credits from the bucket.
+   * Deduct usage from the bucket.
    * Records a ledger entry with the reason and optional metadata.
    */
   async deduct(
     amount: number,
     reason: string,
     metadata?: Record<string, unknown>,
-  ): Promise<DeductResult> {
+  ): Promise<UsageDeductResult> {
     const bucket = await this.resolveBucket();
     const result = await this.store.deduct(
       bucket.id,
@@ -103,7 +103,7 @@ export class CreditManager {
     // Update the cached bucket
     this.bucket = {
       ...bucket,
-      creditsRemaining: result.remaining,
+      usageRemaining: result.remaining,
       totalConsumed: bucket.totalConsumed + amount,
       lastConsumedAt: Date.now(),
       updatedAt: Date.now(),
@@ -115,12 +115,12 @@ export class CreditManager {
   /**
    * Get the full balance information for this owner.
    */
-  async getBalance(): Promise<BalanceInfo> {
+  async getBalance(): Promise<UsageBalanceInfo> {
     const bucket = await this.resolveBucket();
 
     return {
-      remaining: bucket.creditsRemaining,
-      limit: bucket.creditsLimit,
+      remaining: bucket.usageRemaining,
+      limit: bucket.usageLimit,
       totalConsumed: bucket.totalConsumed,
       windowStart: new Date(bucket.windowStart).toISOString(),
       resetsAt: new Date(
@@ -135,18 +135,18 @@ export class CreditManager {
   async getHistory(
     cursor?: string,
     limit?: number,
-  ): Promise<PaginatedLedger> {
+  ): Promise<UsagePaginatedLedger> {
     const bucket = await this.resolveBucket();
     return this.store.getLedger(bucket.id, cursor, limit);
   }
 
   /**
-   * Reset the bucket: refill credits to the limit and start a new window.
+   * Reset the bucket: refill usage to the limit and start a new window.
    */
-  async reset(): Promise<CreditBucket> {
+  async reset(): Promise<UsageBucket> {
     const bucket = await this.resolveBucket();
     this.bucket = await this.store.updateBucket(bucket.id, {
-      creditsRemaining: bucket.creditsLimit,
+      usageRemaining: bucket.usageLimit,
       windowStart: Date.now(),
       totalConsumed: 0,
       updatedAt: Date.now(),
@@ -157,11 +157,11 @@ export class CreditManager {
   /**
    * Provision or update the bucket with new plan settings.
    * If the bucket doesn't exist, creates one.
-   * If it exists, updates the credit limit (and optionally resets remaining).
+   * If it exists, updates the usage limit (and optionally resets remaining).
    */
   async provision(
-    options: BucketProvisionOptions & { resetRemaining?: boolean },
-  ): Promise<CreditBucket> {
+    options: UsageBucketProvisionOptions & { resetRemaining?: boolean },
+  ): Promise<UsageBucket> {
     let bucket = await this.store.getBucket(this.ownerId);
 
     if (!bucket) {
@@ -170,13 +170,13 @@ export class CreditManager {
       return bucket;
     }
 
-    const updates: Parameters<CreditStore["updateBucket"]>[1] = {
-      creditsLimit: options.creditsLimit,
+    const updates: Parameters<UsageStore["updateBucket"]>[1] = {
+      usageLimit: options.usageLimit,
       updatedAt: Date.now(),
     };
 
     if (options.resetRemaining) {
-      updates.creditsRemaining = options.creditsLimit;
+      updates.usageRemaining = options.usageLimit;
       updates.windowStart = Date.now();
       updates.totalConsumed = 0;
     }
