@@ -1,0 +1,76 @@
+{
+  "name": "hono-usage-limiter",
+  "description": "Credit-based usage limiter for Hono applications",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "pkgroll --clean-dist",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "prepare": "is-ci || husky",
+    "test": "vitest"
+  },
+  "keywords": [
+    "hono",
+    "credit",
+    "rate-limit",
+    "usage",
+    "billing",
+    "middleware"
+  ],
+  "homepage": "https://github.com/rhinobase/hono-usage-limiter",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rhinobase/hono-usage-limiter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rhinobase/hono-usage-limiter/issues"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./memory": {
+      "import": {
+        "types": "./dist/memory.d.ts",
+        "default": "./dist/memory.js"
+      },
+      "require": {
+        "types": "./dist/memory.d.cts",
+        "default": "./dist/memory.cjs"
+      }
+    }
+  },
+  "peerDependencies": {
+    "hono": "^4.8.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.6",
+    "hono": "^4.8.3",
+    "husky": "^9.1.7",
+    "is-ci": "^4.1.0",
+    "nano-staged": "^0.8.0",
+    "pkg-pr-new": "^0.0.60",
+    "pkgroll": "^2.13.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@10.0.0"
+}
