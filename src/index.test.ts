@@ -178,7 +178,7 @@ describe("UsageManager", () => {
     const manager = new UsageManager("user-1", {
       store,
       defaultUsage: 500,
-      defaultWindowMs: 1000 * 60 * 60,
+      defaultWindowDurationMs: 1000 * 60 * 60,
     });
 
     const status = await manager.check();
@@ -297,6 +297,45 @@ describe("UsageManager", () => {
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(5000);
+  });
+
+  it("should auto-refill when window expires", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+      defaultWindowDurationMs: 50, // 50ms window
+    });
+
+    await manager.deduct(60, "transcribe");
+    const statusBefore = await manager.check();
+    expect(statusBefore.remaining).toBe(40);
+
+    // Wait for the window to expire
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const statusAfter = await manager.check();
+    expect(statusAfter.remaining).toBe(100);
+    expect(statusAfter.hasUsage).toBe(true);
+  });
+
+  it("should throw on invalid deduct amount", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+    });
+
+    await expect(manager.deduct(0, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
+    await expect(manager.deduct(-5, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
+    await expect(manager.deduct(NaN, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
+    await expect(manager.deduct(Infinity, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
   });
 
   it("should update limit without resetting remaining", async () => {

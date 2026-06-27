@@ -1,4 +1,4 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { MiddlewareHandler } from "hono";
 import { UsageManager } from "./manager";
 import type { UsageManagerConfig } from "./types";
 

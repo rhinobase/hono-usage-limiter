@@ -14,7 +14,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 export class UsageManager {
   private store: UsageStore;
   private defaultUsage: number;
-  private defaultWindowMs: number;
+  private defaultWindowDurationMs: number;
   private autoProvision: boolean;
   private bucket: UsageBucket | null = null;
   private ownerId: string;
@@ -26,7 +26,7 @@ export class UsageManager {
     this.ownerId = ownerId;
     this.store = config.store;
     this.defaultUsage = config.defaultUsage ?? 1000;
-    this.defaultWindowMs = config.defaultWindowMs ?? THIRTY_DAYS_MS;
+    this.defaultWindowDurationMs = config.defaultWindowDurationMs ?? THIRTY_DAYS_MS;
     this.autoProvision = config.autoProvision ?? true;
   }
 
@@ -45,7 +45,7 @@ export class UsageManager {
       }
       this.bucket = await this.store.createBucket(this.ownerId, {
         usageLimit: this.defaultUsage,
-        windowDurationMs: this.defaultWindowMs,
+        windowDurationMs: this.defaultWindowDurationMs,
       });
     }
 
@@ -91,6 +91,10 @@ export class UsageManager {
     reason: string,
     metadata?: Record<string, unknown>,
   ): Promise<UsageDeductResult> {
+    if (amount <= 0 || !Number.isFinite(amount)) {
+      throw new Error("Deduction amount must be a positive finite number");
+    }
+
     const bucket = await this.resolveBucket();
     const result = await this.store.deduct(
       bucket.id,

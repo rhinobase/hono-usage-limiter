@@ -23,7 +23,8 @@ export class MemoryStore implements UsageStore {
   async getBucket(ownerId: string): Promise<UsageBucket | null> {
     const bucketId = this.bucketsByOwner.get(ownerId);
     if (!bucketId) return null;
-    return this.buckets.get(bucketId) ?? null;
+    const bucket = this.buckets.get(bucketId);
+    return bucket ? { ...bucket } : null;
   }
 
   async createBucket(

@@ -11,7 +11,7 @@ export type UsageBucket = {
   windowStart: number;
   /** Duration of the rolling window in milliseconds */
   windowDurationMs: number;
-  /** Total usage units consumed over the lifetime of this bucket */
+  /** Total usage units consumed in the current window */
   totalConsumed: number;
   /** Timestamp of the last usage deduction (epoch ms), or null if never consumed */
   lastConsumedAt: number | null;
@@ -154,7 +154,7 @@ export type UsageManagerConfig = {
   /** Default usage limit for new buckets (default: 1000) */
   defaultUsage?: number;
   /** Default window duration in milliseconds (default: 30 days) */
-  defaultWindowMs?: number;
+  defaultWindowDurationMs?: number;
   /**
    * Function to resolve the owner ID from the Hono context.
    * This is called by the middleware to determine whose bucket to load.
