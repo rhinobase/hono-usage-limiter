@@ -18,26 +18,12 @@ jobs:
     name: Publish release
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Generate GitHub App token
+        id: token
+        uses: actions/create-github-app-token@v2
         with:
-          fetch-depth: 0
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@latest
-
-      - name: Install Craft
-        run: |
-          CRAFT_URL=$(curl -fsSL https://api.github.com/repos/getsentry/craft/releases/latest \
-            | jq -r '.assets[] | select(.name == "craft") | .browser_download_url')
-          sudo curl -fsSL -o /usr/local/bin/craft "$CRAFT_URL"
-          sudo chmod +x /usr/local/bin/craft
+          app-id: ${{ vars.CRAFT_APP_ID }}
+          private-key: ${{ secrets.CRAFT_APP_PRIVATE_KEY }}
 
       - name: Parse version from issue title
         id: release
@@ -54,21 +40,37 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "branch=release/$version" >> "$GITHUB_OUTPUT"
 
-      - name: Check out release branch
-        run: |
-          set -euo pipefail
-          branch="${{ steps.release.outputs.branch }}"
-          git fetch origin "refs/heads/${branch}:refs/heads/${branch}"
-          git checkout "${branch}"
+      - uses: actions/checkout@v4
+        with:
+          ref: release/${{ steps.release.outputs.version }}
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
 
       - name: Set git user
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install Craft
+        run: |
+          CRAFT_URL=$(curl -fsSL https://api.github.com/repos/getsentry/craft/releases/latest \
+            | jq -r '.assets[] | select(.name == "craft") | .browser_download_url')
+          sudo curl -fsSL -o /usr/local/bin/craft "$CRAFT_URL"
+          sudo chmod +x /usr/local/bin/craft
+
       - name: Wait for package artifacts on release branch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
           branch="${{ steps.release.outputs.branch }}"
@@ -85,11 +87,12 @@ jobs:
         run: craft publish "${{ steps.release.outputs.version }}" --no-input --no-status-check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_TOKEN: ${{ steps.token.outputs.token }}
 
       - name: Close issue on success
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           gh issue close "${{ github.event.issue.number }}" \
             --comment "Published **v${{ steps.release.outputs.version }}** successfully.
@@ -98,7 +101,7 @@ jobs:
       - name: Handle failure
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --body "Publish failed. See [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
