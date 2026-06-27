@@ -30,7 +30,7 @@ export type UsageLedgerEntry = {
   ownerId: string;
   /** Number of usage units consumed (positive integer) */
   amount: number;
-  /** Reason for the deduction (e.g., 'transcribe', 'post-process') */
+  /** Reason for the deduction (e.g., 'inference', 'embedding') */
   reason: string;
   /** Optional metadata as a JSON-serializable object */
   metadata: Record<string, unknown> | null;

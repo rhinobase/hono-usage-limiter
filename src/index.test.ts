@@ -87,15 +87,15 @@ describe("MemoryStore", () => {
       bucket.id,
       "user-1",
       30,
-      "transcribe",
-      { audioDurationSeconds: 30 },
+      "inference",
+      { inputTokens: 30 },
     );
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
     expect(result.entry.amount).toBe(30);
-    expect(result.entry.reason).toBe("transcribe");
-    expect(result.entry.metadata).toEqual({ audioDurationSeconds: 30 });
+    expect(result.entry.reason).toBe("inference");
+    expect(result.entry.metadata).toEqual({ inputTokens: 30 });
   });
 
   it("should allow going negative", async () => {
@@ -108,7 +108,7 @@ describe("MemoryStore", () => {
       bucket.id,
       "user-1",
       25,
-      "transcribe",
+      "inference",
     );
 
     expect(result.success).toBe(true);
@@ -207,8 +207,8 @@ describe("UsageManager", () => {
     // Trigger auto-provision
     await manager.check();
 
-    const result = await manager.deduct(30, "transcribe", {
-      audioDurationSeconds: 30,
+    const result = await manager.deduct(30, "inference", {
+      inputTokens: 30,
     });
 
     expect(result.success).toBe(true);
@@ -224,7 +224,7 @@ describe("UsageManager", () => {
       defaultUsage: 1000,
     });
 
-    await manager.deduct(150, "transcribe");
+    await manager.deduct(150, "inference");
 
     const balance = await manager.getBalance();
     expect(balance.remaining).toBe(850);
@@ -240,13 +240,13 @@ describe("UsageManager", () => {
       defaultUsage: 1000,
     });
 
-    await manager.deduct(10, "transcribe");
+    await manager.deduct(10, "inference");
     await manager.deduct(20, "post-process");
 
     const history = await manager.getHistory();
     expect(history.entries).toHaveLength(2);
     expect(history.entries[0].reason).toBe("post-process");
-    expect(history.entries[1].reason).toBe("transcribe");
+    expect(history.entries[1].reason).toBe("inference");
   });
 
   it("should reset the bucket", async () => {
@@ -255,7 +255,7 @@ describe("UsageManager", () => {
       defaultUsage: 1000,
     });
 
-    await manager.deduct(500, "transcribe");
+    await manager.deduct(500, "inference");
 
     const statusBefore = await manager.check();
     expect(statusBefore.remaining).toBe(500);
@@ -286,7 +286,7 @@ describe("UsageManager", () => {
 
     // Create initial bucket
     await manager.check();
-    await manager.deduct(200, "transcribe");
+    await manager.deduct(200, "inference");
 
     // Upgrade plan
     const bucket = await manager.provision({
@@ -306,7 +306,7 @@ describe("UsageManager", () => {
       defaultWindowDurationMs: 50, // 50ms window
     });
 
-    await manager.deduct(60, "transcribe");
+    await manager.deduct(60, "inference");
     const statusBefore = await manager.check();
     expect(statusBefore.remaining).toBe(40);
 
@@ -345,7 +345,7 @@ describe("UsageManager", () => {
     });
 
     await manager.check();
-    await manager.deduct(200, "transcribe");
+    await manager.deduct(200, "inference");
 
     const bucket = await manager.provision({
       usageLimit: 5000,
@@ -415,8 +415,8 @@ describe("usageManager middleware", () => {
         return c.json({ error: "Usage limit exceeded" }, 429);
       }
 
-      const result = await usage.deduct(30, "transcribe", {
-        audioDurationSeconds: 30,
+      const result = await usage.deduct(30, "inference", {
+        inputTokens: 30,
       });
 
       return c.json({

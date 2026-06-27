@@ -38,7 +38,7 @@ app.get("/usage", async (c) => {
 });
 
 // Consume usage
-app.post("/transcribe", async (c) => {
+app.post("/inference", async (c) => {
   const usage = c.get("usage");
 
   const status = await usage.check();
@@ -47,10 +47,10 @@ app.post("/transcribe", async (c) => {
   }
 
   // Do expensive work...
-  const result = await transcribe(audio);
+  const result = await runInference(input);
 
   // Deduct actual cost
-  await usage.deduct(30, "transcribe", { audioDurationSeconds: 30 });
+  await usage.deduct(30, "inference", { inputTokens: 500, outputTokens: 150 });
 
   return c.json(result);
 });

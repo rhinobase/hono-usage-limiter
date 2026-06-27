@@ -87,15 +87,15 @@ describe("UnstorageStore", () => {
       bucket.id,
       "user-1",
       30,
-      "transcribe",
-      { audioDurationSeconds: 30 },
+      "inference",
+      { inputTokens: 30 },
     );
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
     expect(result.entry.amount).toBe(30);
-    expect(result.entry.reason).toBe("transcribe");
-    expect(result.entry.metadata).toEqual({ audioDurationSeconds: 30 });
+    expect(result.entry.reason).toBe("inference");
+    expect(result.entry.metadata).toEqual({ inputTokens: 30 });
   });
 
   it("should allow going negative", async () => {
@@ -108,7 +108,7 @@ describe("UnstorageStore", () => {
       bucket.id,
       "user-1",
       25,
-      "transcribe",
+      "inference",
     );
 
     expect(result.success).toBe(true);
@@ -198,8 +198,8 @@ describe("UsageManager with UnstorageStore", () => {
     expect(status.remaining).toBe(1000);
     expect(status.hasUsage).toBe(true);
 
-    await manager.deduct(300, "transcribe", {
-      audioDurationSeconds: 300,
+    await manager.deduct(300, "inference", {
+      inputTokens: 300,
     });
 
     const balance = await manager.getBalance();
@@ -208,6 +208,6 @@ describe("UsageManager with UnstorageStore", () => {
 
     const history = await manager.getHistory();
     expect(history.entries).toHaveLength(1);
-    expect(history.entries[0].reason).toBe("transcribe");
+    expect(history.entries[0].reason).toBe("inference");
   });
 });
