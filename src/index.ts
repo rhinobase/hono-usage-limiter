@@ -1,5 +1,6 @@
 export { usageManager } from "./middleware";
 export { UsageManager } from "./manager";
+export type { UsageManagerOptions } from "./manager";
 export type { UsageEnv } from "./middleware";
 export type {
   UsageBalanceInfo,
@@ -8,6 +9,7 @@ export type {
   UsageManagerConfig,
   UsageStatus,
   UsageStore,
+  UsageStoreFactory,
   UsageDeductResult,
   UsageLedgerEntry,
   UsagePaginatedLedger,

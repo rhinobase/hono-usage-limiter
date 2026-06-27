@@ -358,6 +358,92 @@ describe("UsageManager", () => {
 });
 
 describe("usageManager middleware", () => {
+  it("should support a store factory function", async () => {
+    const store = new MemoryStore();
+    const factory = () => store;
+
+    const app = new Hono<UsageEnv & { Variables: { userId: string } }>();
+
+    app.use(async (c, next) => {
+      c.set("userId", "user-1");
+      await next();
+    });
+
+    app.use(
+      usageManager({
+        store: factory,
+        defaultUsage: 200,
+        keyGenerator: (c) =>
+          (c as { get: (key: string) => string }).get("userId"),
+      }),
+    );
+
+    app.get("/balance", async (c) => {
+      const balance = await c.get("usage").getBalance();
+      return c.json(balance);
+    });
+
+    const res = await app.request("/balance");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.remaining).toBe(200);
+    expect(body.limit).toBe(200);
+  });
+
+  it("should call store factory with the Hono context on each request", async () => {
+    const stores: Record<string, MemoryStore> = {};
+    let factoryCallCount = 0;
+
+    const factory = (c: unknown) => {
+      factoryCallCount++;
+      const ctx = c as { get: (key: string) => string };
+      const userId = ctx.get("userId");
+      // Return a per-user store to prove context is being passed
+      if (!stores[userId]) {
+        stores[userId] = new MemoryStore();
+      }
+      return stores[userId];
+    };
+
+    const app = new Hono<UsageEnv & { Variables: { userId: string } }>();
+
+    app.use(async (c, next) => {
+      const id = c.req.header("x-user-id") ?? "unknown";
+      c.set("userId", id);
+      await next();
+    });
+
+    app.use(
+      usageManager({
+        store: factory,
+        defaultUsage: 100,
+        keyGenerator: (c) =>
+          (c as { get: (key: string) => string }).get("userId"),
+      }),
+    );
+
+    app.get("/balance", async (c) => {
+      const balance = await c.get("usage").getBalance();
+      return c.json(balance);
+    });
+
+    // Two requests — factory should be called each time
+    const res1 = await app.request("/balance", {
+      headers: { "x-user-id": "user-a" },
+    });
+    const res2 = await app.request("/balance", {
+      headers: { "x-user-id": "user-b" },
+    });
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(factoryCallCount).toBe(2);
+
+    // Each user should have their own isolated store
+    expect(Object.keys(stores)).toEqual(["user-a", "user-b"]);
+  });
+
   it("should inject UsageManager onto context", async () => {
     const store = new MemoryStore();
     const app = new Hono<UsageEnv & { Variables: { userId: string } }>();

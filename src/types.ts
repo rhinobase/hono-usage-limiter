@@ -148,9 +148,33 @@ export interface UsageStore {
   ): Promise<UsagePaginatedLedger>;
 }
 
+/**
+ * A factory function that receives the Hono context and returns a UsageStore.
+ * Use this when the store requires request-scoped resources (e.g., Cloudflare D1 bindings).
+ *
+ * @example
+ * ```ts
+ * app.use(usageManager({
+ *   store: (c) => new D1Store({ db: c.env.DB }),
+ *   keyGenerator: (c) => c.get("userId"),
+ * }));
+ * ```
+ */
+export type UsageStoreFactory = (c: unknown) => UsageStore;
+
 export type UsageManagerConfig = {
-  /** The storage adapter to use */
-  store: UsageStore;
+  /**
+   * The storage adapter to use, either as a pre-constructed instance
+   * or a factory function that receives the Hono context.
+   *
+   * Use a factory when the store depends on request-scoped bindings
+   * (e.g., `c.env.DB` in Cloudflare Workers):
+   *
+   * ```ts
+   * store: (c) => new D1Store({ db: c.env.DB })
+   * ```
+   */
+  store: UsageStore | UsageStoreFactory;
   /** Default usage limit for new buckets (default: 1000) */
   defaultUsage?: number;
   /** Default window duration in milliseconds (default: 30 days) */

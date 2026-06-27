@@ -2,7 +2,6 @@ import type {
   UsageBalanceInfo,
   UsageBucketProvisionOptions,
   UsageBucket,
-  UsageManagerConfig,
   UsageStatus,
   UsageStore,
   UsageDeductResult,
@@ -10,6 +9,14 @@ import type {
 } from "./types";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Options accepted by the UsageManager constructor (store must be a resolved instance). */
+export type UsageManagerOptions = {
+  store: UsageStore;
+  defaultUsage?: number;
+  defaultWindowDurationMs?: number;
+  autoProvision?: boolean;
+};
 
 export class UsageManager {
   private store: UsageStore;
@@ -19,10 +26,7 @@ export class UsageManager {
   private bucket: UsageBucket | null = null;
   private ownerId: string;
 
-  constructor(
-    ownerId: string,
-    config: Omit<UsageManagerConfig, "keyGenerator">,
-  ) {
+  constructor(ownerId: string, config: UsageManagerOptions) {
     this.ownerId = ownerId;
     this.store = config.store;
     this.defaultUsage = config.defaultUsage ?? 1000;
