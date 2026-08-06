@@ -6,6 +6,7 @@ import type {
   UsageStore,
   UsageDeductResult,
   UsagePaginatedLedger,
+  UsageTryDeductResult,
 } from "./types";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -53,16 +54,28 @@ export class UsageManager {
       });
     }
 
-    // Auto-refill: if the window has expired, reset the bucket
-    const windowEnd =
-      this.bucket.windowStart + this.bucket.windowDurationMs;
+    // Auto-refill: if the window has expired, reset the bucket. Prefer the
+    // store's atomic `refillWindow` (guarded on the observed windowStart) so two
+    // concurrent requests can't both roll the window over and double the
+    // allowance. Fall back to a best-effort updateBucket for stores that don't
+    // implement it.
+    const windowEnd = this.bucket.windowStart + this.bucket.windowDurationMs;
     if (Date.now() >= windowEnd) {
-      this.bucket = await this.store.updateBucket(this.bucket.id, {
-        usageRemaining: this.bucket.usageLimit,
-        windowStart: Date.now(),
-        totalConsumed: 0,
-        updatedAt: Date.now(),
-      });
+      const now = Date.now();
+      if (this.store.refillWindow) {
+        this.bucket = await this.store.refillWindow(
+          this.bucket.id,
+          this.bucket.windowStart,
+          now,
+        );
+      } else {
+        this.bucket = await this.store.updateBucket(this.bucket.id, {
+          usageRemaining: this.bucket.usageLimit,
+          windowStart: now,
+          totalConsumed: 0,
+          updatedAt: now,
+        });
+      }
     }
 
     return this.bucket;
@@ -116,6 +129,52 @@ export class UsageManager {
       lastConsumedAt: Date.now(),
       updatedAt: Date.now(),
     };
+
+    return result;
+  }
+
+  /**
+   * Atomically deduct usage **only if** the bucket has enough remaining.
+   *
+   * This is the safe alternative to a manual `check()`-then-`deduct()`: the
+   * balance check and the write happen atomically in the store, so concurrent
+   * callers can't both pass the check and overspend a shared bucket. When the
+   * bucket has fewer than `amount` units remaining, nothing is written and the
+   * result is `{ success: false, remaining, entry: null }`.
+   *
+   * Records a ledger entry with the reason and optional metadata on success.
+   */
+  async tryDeduct(
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult> {
+    if (amount <= 0 || !Number.isFinite(amount)) {
+      throw new Error("Deduction amount must be a positive finite number");
+    }
+
+    const bucket = await this.resolveBucket();
+    const result = await this.store.tryDeduct(
+      bucket.id,
+      this.ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    // Keep the cached bucket in step with the authoritative result. On a refused
+    // deduction nothing changed except that we now know the current remaining.
+    if (result.success) {
+      this.bucket = {
+        ...bucket,
+        usageRemaining: result.remaining,
+        totalConsumed: bucket.totalConsumed + amount,
+        lastConsumedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    } else {
+      this.bucket = { ...bucket, usageRemaining: result.remaining };
+    }
 
     return result;
   }

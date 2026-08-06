@@ -1,3 +1,5 @@
+import type { Context, Env } from "hono";
+
 export type UsageBucket = {
   /** Unique identifier for the bucket */
   id: string;
@@ -71,6 +73,32 @@ export type UsageDeductResult = {
   entry: UsageLedgerEntry;
 };
 
+/**
+ * Result of an atomic {@link UsageStore.tryDeduct} / {@link UsageManager.tryDeduct}.
+ *
+ * Unlike {@link UsageDeductResult}, the deduction is only applied when the
+ * bucket has enough usage remaining. When `success` is `false` nothing was
+ * written — no balance change, no ledger entry — and `remaining` reflects the
+ * unchanged balance.
+ */
+export type UsageTryDeductResult =
+  | {
+      /** The deduction was applied. */
+      success: true;
+      /** Usage units remaining after the deduction. */
+      remaining: number;
+      /** The ledger entry created for this deduction. */
+      entry: UsageLedgerEntry;
+    }
+  | {
+      /** The deduction was refused — the bucket had insufficient usage. */
+      success: false;
+      /** Usage units remaining (unchanged). */
+      remaining: number;
+      /** No ledger entry is created when a deduction is refused. */
+      entry: null;
+    };
+
 export type UsagePaginatedLedger = {
   /** Ledger entries for the current page */
   entries: UsageLedgerEntry[];
@@ -138,6 +166,26 @@ export interface UsageStore {
   ): Promise<UsageDeductResult>;
 
   /**
+   * Atomically deduct usage **only if** the bucket has enough remaining.
+   *
+   * This is the safe, gate-and-deduct primitive: the balance check and the
+   * write happen in a single atomic operation, so concurrent callers can't both
+   * pass a check and overspend a shared bucket. When the bucket has fewer than
+   * `amount` units remaining, nothing is written and the result is
+   * `{ success: false, remaining, entry: null }`.
+   *
+   * On success it behaves like {@link UsageStore.deduct}: it decrements
+   * `usageRemaining`, increments `totalConsumed`, and inserts a ledger entry.
+   */
+  tryDeduct(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult>;
+
+  /**
    * Get paginated ledger entries for a bucket.
    * Entries should be ordered by `createdAt` descending (newest first).
    */
@@ -146,23 +194,54 @@ export interface UsageStore {
     cursor?: string,
     limit?: number,
   ): Promise<UsagePaginatedLedger>;
+
+  /**
+   * Atomically refill a bucket's window **only if** its window has not already
+   * been advanced past `expectedWindowStart`.
+   *
+   * Optional. When a store implements this, {@link UsageManager} uses it to roll
+   * a bucket over to a fresh window without a read-then-write race: two
+   * concurrent requests that both observe an expired window can't both reset it
+   * (which would double the allowance or clobber `totalConsumed`). The refill
+   * resets `usageRemaining` to `usageLimit`, sets `windowStart` to `newWindowStart`,
+   * and zeroes `totalConsumed`.
+   *
+   * Returns the bucket as it stands after the operation — the freshly refilled
+   * bucket when this call performed the reset, or the bucket a concurrent caller
+   * already refilled (its `windowStart` will differ from `expectedWindowStart`).
+   *
+   * Stores whose backend has no conditional write (e.g. plain KV) may leave this
+   * unimplemented; the manager then falls back to a best-effort
+   * {@link updateBucket}.
+   */
+  refillWindow?(
+    bucketId: string,
+    expectedWindowStart: number,
+    newWindowStart: number,
+  ): Promise<UsageBucket>;
 }
 
 /**
  * A factory function that receives the Hono context and returns a UsageStore.
  * Use this when the store requires request-scoped resources (e.g., Cloudflare D1 bindings).
  *
+ * The context is typed to your app's `Env` when you pass it as a type argument
+ * to {@link usageManager}, so `c.env` and `c.get(...)` are fully typed with no
+ * casts required.
+ *
  * @example
  * ```ts
- * app.use(usageManager({
+ * app.use(usageManager<{ Bindings: { DB: D1Database } }>({
  *   store: (c) => new D1Store({ db: c.env.DB }),
  *   keyGenerator: (c) => c.get("userId"),
  * }));
  * ```
  */
-export type UsageStoreFactory = (c: unknown) => UsageStore;
+export type UsageStoreFactory<E extends Env = Env> = (
+  c: Context<E>,
+) => UsageStore;
 
-export type UsageManagerConfig = {
+export type UsageManagerConfig<E extends Env = Env> = {
   /**
    * The storage adapter to use, either as a pre-constructed instance
    * or a factory function that receives the Hono context.
@@ -174,7 +253,7 @@ export type UsageManagerConfig = {
    * store: (c) => new D1Store({ db: c.env.DB })
    * ```
    */
-  store: UsageStore | UsageStoreFactory;
+  store: UsageStore | UsageStoreFactory<E>;
   /** Default usage limit for new buckets (default: 1000) */
   defaultUsage?: number;
   /** Default window duration in milliseconds (default: 30 days) */
@@ -183,7 +262,7 @@ export type UsageManagerConfig = {
    * Function to resolve the owner ID from the Hono context.
    * This is called by the middleware to determine whose bucket to load.
    */
-  keyGenerator: (c: unknown) => string | Promise<string>;
+  keyGenerator: (c: Context<E>) => string | Promise<string>;
   /** Whether to auto-provision a bucket if one doesn't exist (default: true) */
   autoProvision?: boolean;
 };

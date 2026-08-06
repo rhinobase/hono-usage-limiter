@@ -6,6 +6,7 @@ import type {
   UsageLedgerEntry,
   UsagePaginatedLedger,
   UsageStore,
+  UsageTryDeductResult,
 } from "./types";
 
 function generateId(): string {
@@ -20,6 +21,7 @@ function generateId(): string {
  *
  * Key layout:
  * - `bucket:{ownerId}` — the UsageBucket object
+ * - `bucket-owner:{bucketId}` — reverse lookup: the ownerId for a bucket id
  * - `ledger:{bucketId}:{entryId}` — individual ledger entries
  * - `ledger-index:{bucketId}` — array of entry IDs (newest first)
  *
@@ -43,6 +45,10 @@ export class UnstorageStore implements UsageStore {
 
   private bucketKey(ownerId: string): string {
     return `${this.prefix}:bucket:${ownerId}`;
+  }
+
+  private bucketOwnerKey(bucketId: string): string {
+    return `${this.prefix}:bucket-owner:${bucketId}`;
   }
 
   private ledgerKey(bucketId: string, entryId: string): string {
@@ -85,6 +91,7 @@ export class UnstorageStore implements UsageStore {
     };
 
     await this.storage.setItem(this.bucketKey(ownerId), bucket);
+    await this.storage.setItem(this.bucketOwnerKey(bucket.id), ownerId);
     await this.storage.setItem(this.ledgerIndexKey(bucket.id), []);
 
     return bucket;
@@ -104,18 +111,12 @@ export class UnstorageStore implements UsageStore {
       >
     >,
   ): Promise<UsageBucket> {
-    // We need to find the bucket by ID — scan by looking it up via the stored data
-    // Since unstorage is KV and we key by ownerId, we store a reverse lookup
-    const keys = await this.storage.getKeys(`${this.prefix}:bucket`);
-    let found: UsageBucket | null = null;
-
-    for (const key of keys) {
-      const bucket = await this.storage.getItem<UsageBucket>(key);
-      if (bucket && bucket.id === bucketId) {
-        found = bucket;
-        break;
-      }
-    }
+    // Resolve the owner via the reverse-lookup key written on createBucket —
+    // an O(1) read instead of scanning every bucket key.
+    const ownerId = await this.storage.getItem<string>(
+      this.bucketOwnerKey(bucketId),
+    );
+    const found = ownerId ? await this.getBucket(ownerId) : null;
 
     if (!found) {
       throw new Error(`Usage bucket "${bucketId}" not found`);
@@ -143,6 +144,72 @@ export class UnstorageStore implements UsageStore {
       throw new Error(`Usage bucket "${bucketId}" not found`);
     }
 
+    const { remaining, entry } = await this.applyDeduction(
+      bucket,
+      bucketId,
+      ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    return {
+      success: true,
+      remaining,
+      entry,
+    };
+  }
+
+  async tryDeduct(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult> {
+    const bucket = await this.getBucket(ownerId);
+    if (!bucket || bucket.id !== bucketId) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
+    // NOTE: unstorage is a plain KV store with no compare-and-swap, so this
+    // gate is a read-modify-write and is NOT safe against truly concurrent
+    // writers to the same key. It prevents accidental overspend for the common
+    // (serialized) case; for strong atomicity under concurrency use a store
+    // whose backend supports it (e.g. the D1Store).
+    if (bucket.usageRemaining < amount) {
+      return {
+        success: false,
+        remaining: bucket.usageRemaining,
+        entry: null,
+      };
+    }
+
+    const { remaining, entry } = await this.applyDeduction(
+      bucket,
+      bucketId,
+      ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    return {
+      success: true,
+      remaining,
+      entry,
+    };
+  }
+
+  /** Shared write path for {@link deduct} and {@link tryDeduct}. */
+  private async applyDeduction(
+    bucket: UsageBucket,
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ remaining: number; entry: UsageLedgerEntry }> {
     const now = Date.now();
 
     const entry: UsageLedgerEntry = {
@@ -166,23 +233,15 @@ export class UnstorageStore implements UsageStore {
 
     // Store the updated bucket, the ledger entry, and update the index
     await this.storage.setItem(this.bucketKey(ownerId), updated);
-    await this.storage.setItem(
-      this.ledgerKey(bucketId, entry.id),
-      entry,
-    );
+    await this.storage.setItem(this.ledgerKey(bucketId, entry.id), entry);
 
     const index =
-      (await this.storage.getItem<string[]>(
-        this.ledgerIndexKey(bucketId),
-      )) ?? [];
+      (await this.storage.getItem<string[]>(this.ledgerIndexKey(bucketId))) ??
+      [];
     index.unshift(entry.id);
     await this.storage.setItem(this.ledgerIndexKey(bucketId), index);
 
-    return {
-      success: true,
-      remaining,
-      entry,
-    };
+    return { remaining, entry };
   }
 
   async getLedger(
@@ -191,9 +250,8 @@ export class UnstorageStore implements UsageStore {
     limit = 20,
   ): Promise<UsagePaginatedLedger> {
     const index =
-      (await this.storage.getItem<string[]>(
-        this.ledgerIndexKey(bucketId),
-      )) ?? [];
+      (await this.storage.getItem<string[]>(this.ledgerIndexKey(bucketId))) ??
+      [];
 
     let startIndex = 0;
     if (cursor) {
@@ -221,5 +279,37 @@ export class UnstorageStore implements UsageStore {
       entries,
       nextCursor: hasMore ? pageIds[pageIds.length - 1] : null,
     };
+  }
+
+  async refillWindow(
+    bucketId: string,
+    expectedWindowStart: number,
+    newWindowStart: number,
+  ): Promise<UsageBucket> {
+    const ownerId = await this.storage.getItem<string>(
+      this.bucketOwnerKey(bucketId),
+    );
+    const bucket = ownerId ? await this.getBucket(ownerId) : null;
+    if (!bucket) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
+    // Only refill if the window hasn't already advanced. As with tryDeduct,
+    // unstorage has no compare-and-swap so this is best-effort and not safe
+    // against truly concurrent writers.
+    if (bucket.windowStart !== expectedWindowStart) {
+      return bucket;
+    }
+
+    const now = Date.now();
+    const updated: UsageBucket = {
+      ...bucket,
+      usageRemaining: bucket.usageLimit,
+      windowStart: newWindowStart,
+      totalConsumed: 0,
+      updatedAt: now,
+    };
+    await this.storage.setItem(this.bucketKey(bucket.ownerId), updated);
+    return updated;
   }
 }

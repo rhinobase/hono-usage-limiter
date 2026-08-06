@@ -41,20 +41,50 @@ app.get("/usage", async (c) => {
 app.post("/inference", async (c) => {
   const usage = c.get("usage");
 
-  const status = await usage.check();
-  if (!status.hasUsage) {
+  // Atomically gate-and-deduct: refuses (and writes nothing) when the caller
+  // is out of budget. Prefer this over a manual check()-then-deduct() — the
+  // check and the write happen atomically so concurrent requests can't both
+  // pass the gate and overspend a shared bucket.
+  const gate = await usage.tryDeduct(30, "inference", {
+    inputTokens: 500,
+    outputTokens: 150,
+  });
+  if (!gate.success) {
     return c.json({ error: "Usage limit exceeded" }, 429);
   }
 
   // Do expensive work...
   const result = await runInference(input);
 
-  // Deduct actual cost
-  await usage.deduct(30, "inference", { inputTokens: 500, outputTokens: 150 });
+  return c.json(result);
+});
+```
+
+### Gate up front vs. meter after
+
+`tryDeduct()` refuses when the balance is insufficient — use it when you want a
+hard limit before doing the work. If instead you meter *actual* usage after the
+work completes (and are fine with the final operation overshooting the balance
+as a soft limit), use `check()` to gate and `deduct()` to record the real cost:
+
+```typescript
+app.post("/inference", async (c) => {
+  const usage = c.get("usage");
+
+  const status = await usage.check();
+  if (!status.hasUsage) {
+    return c.json({ error: "Usage limit exceeded" }, 429);
+  }
+
+  const result = await runInference(input); // cost not known until now
+  await usage.deduct(result.tokensUsed, "inference");
 
   return c.json(result);
 });
 ```
+
+> `deduct()` is unconditional and may drive the balance negative (a soft limit).
+> `tryDeduct()` is conditional and never overspends (a hard limit).
 
 ## Storage Adapters
 
@@ -149,8 +179,64 @@ class MyStore implements UsageStore {
   createBucket(ownerId, options) { /* ... */ }
   updateBucket(bucketId, updates) { /* ... */ }
   deduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
+  tryDeduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
   getLedger(bucketId, cursor?, limit?) { /* ... */ }
+  // Optional: an atomic window refill guarded on windowStart. When omitted,
+  // the manager falls back to a best-effort updateBucket on window rollover.
+  refillWindow?(bucketId, expectedWindowStart, newWindowStart) { /* ... */ }
 }
+```
+
+### `CachedUsageStore`
+
+Wraps any `UsageStore` with a short-lived read-through cache over the per-owner
+bucket read. On a remote store (e.g. D1) the `getBucket` behind every `check()`
+is often the hottest, slowest path; the balance only changes on a write, so
+caching it for a short TTL removes that read from the common path. Writes always
+go straight to the underlying store, and the cached copy is patched in step
+after each write, so the authoritative balance is never served from cache.
+
+Bring your own cache backend by implementing the small `UsageCache` interface
+(`get`/`set`/`delete`) — e.g. over the Cloudflare Cache API, a `Map`, or Redis.
+
+```typescript
+import { CachedUsageStore } from "hono-usage-limiter/cache";
+import { D1Store } from "hono-usage-limiter/d1";
+
+const store = new CachedUsageStore({
+  store: new D1Store({ db: env.DB }),
+  cache: {
+    get: (key) => myCache.get(key),
+    set: (key, value, ttlSeconds) => myCache.set(key, value, ttlSeconds),
+    delete: (key) => myCache.delete(key),
+  },
+  ttlSeconds: 120, // default
+});
+```
+
+## Typed context
+
+Pass your app's `Env` as a type argument to `usageManager` and the context in
+both `store` (factory form) and `keyGenerator` is fully typed — no casts:
+
+```typescript
+import type { D1Database } from "@cloudflare/workers-types";
+import { usageManager, type UsageEnv } from "hono-usage-limiter";
+import { D1Store } from "hono-usage-limiter/d1";
+
+type AppEnv = {
+  Bindings: { DB: D1Database };
+  Variables: { userId: string };
+};
+
+const app = new Hono<AppEnv & UsageEnv>();
+
+app.use(
+  usageManager<AppEnv>({
+    store: (c) => new D1Store({ db: c.env.DB }), // c.env is typed
+    keyGenerator: (c) => c.get("userId"), // c.get is typed
+  }),
+);
 ```
 
 ## API
@@ -176,7 +262,8 @@ Available via `c.get("usage")` in your handlers:
 | Method | Description |
 |---|---|
 | `check()` | Returns `UsageStatus` with `remaining`, `limit`, `hasUsage`, `resetsAt` |
-| `deduct(amount, reason, metadata?)` | Deducts usage and records a ledger entry |
+| `deduct(amount, reason, metadata?)` | Unconditionally deducts usage and records a ledger entry (may go negative) |
+| `tryDeduct(amount, reason, metadata?)` | Atomically deducts **only if** the balance allows; returns `{ success: false, entry: null }` when insufficient (nothing written) |
 | `getBalance()` | Returns full `UsageBalanceInfo` including `totalConsumed` and window timestamps |
 | `getHistory(cursor?, limit?)` | Returns paginated ledger entries (newest first) |
 | `reset()` | Refills usage to the limit and starts a new window |

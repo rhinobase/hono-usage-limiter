@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { describe, expect, it, beforeEach } from "vitest";
-import { usageManager, type UsageEnv } from "./middleware";
+import { beforeEach, describe, expect, it } from "vitest";
 import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
+import { type UsageEnv, usageManager } from "./middleware";
 
 describe("MemoryStore", () => {
   let store: MemoryStore;
@@ -83,13 +83,9 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      30,
-      "inference",
-      { inputTokens: 30 },
-    );
+    const result = await store.deduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
@@ -104,15 +100,100 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      25,
-      "inference",
-    );
+    const result = await store.deduct(bucket.id, "user-1", 25, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(-15);
+  });
+
+  it("tryDeduct should apply when balance is sufficient", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(70);
+    expect(result.entry).not.toBeNull();
+    expect(result.entry?.amount).toBe(30);
+  });
+
+  it("tryDeduct should apply when it exactly empties the bucket", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 50,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 50, "inference");
+
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(0);
+  });
+
+  it("tryDeduct should refuse and write nothing when balance is insufficient", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 25, "inference");
+
+    expect(result.success).toBe(false);
+    expect(result.remaining).toBe(10);
+    expect(result.entry).toBeNull();
+
+    // Balance is unchanged and no ledger entry was recorded.
+    const after = await store.getBucket("user-1");
+    expect(after?.usageRemaining).toBe(10);
+    expect(after?.totalConsumed).toBe(0);
+    const { entries } = await store.getLedger(bucket.id);
+    expect(entries).toHaveLength(0);
+  });
+
+  it("refillWindow should reset when windowStart matches", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 40, "inference");
+
+    const refilled = await store.refillWindow(
+      bucket.id,
+      bucket.windowStart,
+      bucket.windowStart + 5000,
+    );
+
+    expect(refilled.usageRemaining).toBe(100);
+    expect(refilled.totalConsumed).toBe(0);
+    expect(refilled.windowStart).toBe(bucket.windowStart + 5000);
+  });
+
+  it("refillWindow should be a no-op when windowStart no longer matches", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 40, "inference");
+
+    // Simulate a concurrent refill that already advanced the window.
+    await store.refillWindow(
+      bucket.id,
+      bucket.windowStart,
+      bucket.windowStart + 5000,
+    );
+
+    // A second caller that observed the *old* windowStart must not double-refill.
+    const second = await store.refillWindow(
+      bucket.id,
+      bucket.windowStart,
+      bucket.windowStart + 9999,
+    );
+
+    expect(second.windowStart).toBe(bucket.windowStart + 5000);
   });
 
   it("should return paginated ledger entries", async () => {
@@ -132,20 +213,12 @@ describe("MemoryStore", () => {
     expect(page1.nextCursor).not.toBeNull();
 
     // Get second page
-    const page2 = await store.getLedger(
-      bucket.id,
-      page1.nextCursor!,
-      2,
-    );
+    const page2 = await store.getLedger(bucket.id, page1.nextCursor!, 2);
     expect(page2.entries).toHaveLength(2);
     expect(page2.nextCursor).not.toBeNull();
 
     // Get third page
-    const page3 = await store.getLedger(
-      bucket.id,
-      page2.nextCursor!,
-      2,
-    );
+    const page3 = await store.getLedger(bucket.id, page2.nextCursor!, 2);
     expect(page3.entries).toHaveLength(1);
     expect(page3.nextCursor).toBeNull();
   });
@@ -216,6 +289,50 @@ describe("UsageManager", () => {
 
     const status = await manager.check();
     expect(status.remaining).toBe(70);
+  });
+
+  it("tryDeduct should deduct when balance allows and reflect it in check()", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+    });
+
+    const result = await manager.tryDeduct(40, "inference");
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(60);
+
+    const status = await manager.check();
+    expect(status.remaining).toBe(60);
+  });
+
+  it("tryDeduct should refuse when balance is insufficient and leave the bucket untouched", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 30,
+    });
+
+    const result = await manager.tryDeduct(50, "inference");
+    expect(result.success).toBe(false);
+    expect(result.remaining).toBe(30);
+    expect(result.entry).toBeNull();
+
+    const balance = await manager.getBalance();
+    expect(balance.remaining).toBe(30);
+    expect(balance.totalConsumed).toBe(0);
+
+    const history = await manager.getHistory();
+    expect(history.entries).toHaveLength(0);
+  });
+
+  it("tryDeduct should throw on invalid amounts", async () => {
+    const manager = new UsageManager("user-1", { store, defaultUsage: 100 });
+
+    await expect(manager.tryDeduct(0, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
+    await expect(manager.tryDeduct(-5, "test")).rejects.toThrow(
+      "Deduction amount must be a positive finite number",
+    );
   });
 
   it("should return full balance info", async () => {

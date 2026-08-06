@@ -7,6 +7,7 @@ import type {
   UsageLedgerEntry,
   UsagePaginatedLedger,
   UsageStore,
+  UsageTryDeductResult,
 } from "./types";
 
 function generateId(): string {
@@ -277,6 +278,85 @@ export class D1Store implements UsageStore {
     };
   }
 
+  async tryDeduct(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult> {
+    const now = Date.now();
+    const entryId = generateId();
+    const metadataJson = metadata ? JSON.stringify(metadata) : null;
+
+    // Atomic gate-and-deduct. The `WHERE ... AND usage_remaining >= ?` clause
+    // makes the balance check and the write a single conditional UPDATE, so two
+    // concurrent callers can never both pass the check and overspend a shared
+    // bucket — at most one UPDATE matches. `meta.changes` tells us whether the
+    // deduction was applied. The UPDATE and the balance SELECT run in the same
+    // batch (one implicit transaction).
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE ${this.bucketsTable}
+            SET usage_remaining = usage_remaining - ?,
+                total_consumed = total_consumed + ?,
+                last_consumed_at = ?,
+                updated_at = ?
+            WHERE id = ? AND usage_remaining >= ?`,
+        )
+        .bind(amount, amount, now, now, bucketId, amount),
+      this.db
+        .prepare(
+          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`,
+        )
+        .bind(bucketId),
+    ]);
+
+    const updateResult = results[0] as D1Result;
+    const applied = (updateResult.meta.changes ?? 0) > 0;
+
+    const selectResult = results[1] as D1Result<Record<string, unknown>>;
+    const remaining = (selectResult.results[0]?.usage_remaining as number) ?? 0;
+
+    // Deduction refused (insufficient balance) — nothing was written, so we
+    // don't record a ledger entry either.
+    if (!applied) {
+      return {
+        success: false,
+        remaining,
+        entry: null,
+      };
+    }
+
+    // The gate passed and the balance is already committed. Record the ledger
+    // entry for the applied deduction.
+    await this.db
+      .prepare(
+        `INSERT INTO ${this.ledgerTable}
+          (id, bucket_id, owner_id, amount, reason, metadata, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(entryId, bucketId, ownerId, amount, reason, metadataJson, now)
+      .run();
+
+    const entry: UsageLedgerEntry = {
+      id: entryId,
+      bucketId,
+      ownerId,
+      amount,
+      reason,
+      metadata: metadata ?? null,
+      createdAt: now,
+    };
+
+    return {
+      success: true,
+      remaining,
+      entry,
+    };
+  }
+
   async getLedger(
     bucketId: string,
     cursor?: string,
@@ -334,5 +414,38 @@ export class D1Store implements UsageStore {
       entries,
       nextCursor: hasMore ? entries[entries.length - 1].id : null,
     };
+  }
+
+  async refillWindow(
+    bucketId: string,
+    expectedWindowStart: number,
+    newWindowStart: number,
+  ): Promise<UsageBucket> {
+    // Conditional reset: only the request whose observed `window_start` still
+    // matches wins. A concurrent request that already rolled the window over
+    // will have changed `window_start`, so this UPDATE matches zero rows and we
+    // simply return whatever the current (already-refilled) bucket is.
+    await this.db
+      .prepare(
+        `UPDATE ${this.bucketsTable}
+          SET usage_remaining = usage_limit,
+              window_start = ?,
+              total_consumed = 0,
+              updated_at = ?
+          WHERE id = ? AND window_start = ?`,
+      )
+      .bind(newWindowStart, newWindowStart, bucketId, expectedWindowStart)
+      .run();
+
+    const row = await this.db
+      .prepare(`SELECT * FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`)
+      .bind(bucketId)
+      .first();
+
+    if (!row) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
+    return this.rowToBucket(row);
   }
 }

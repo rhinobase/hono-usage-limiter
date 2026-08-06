@@ -1,7 +1,7 @@
 import { createStorage } from "unstorage";
-import { describe, expect, it, beforeEach } from "vitest";
-import { UnstorageStore } from "./unstorage";
+import { beforeEach, describe, expect, it } from "vitest";
 import { UsageManager } from "./manager";
+import { UnstorageStore } from "./unstorage";
 
 describe("UnstorageStore", () => {
   let store: UnstorageStore;
@@ -83,13 +83,9 @@ describe("UnstorageStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      30,
-      "inference",
-      { inputTokens: 30 },
-    );
+    const result = await store.deduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
@@ -104,15 +100,73 @@ describe("UnstorageStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      25,
-      "inference",
-    );
+    const result = await store.deduct(bucket.id, "user-1", 25, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(-15);
+  });
+
+  it("tryDeduct should apply when sufficient and refuse when not", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 40,
+      windowDurationMs: 1000,
+    });
+
+    const ok = await store.tryDeduct(bucket.id, "user-1", 30, "inference");
+    expect(ok.success).toBe(true);
+    expect(ok.remaining).toBe(10);
+    expect(ok.entry).not.toBeNull();
+
+    const refused = await store.tryDeduct(bucket.id, "user-1", 25, "inference");
+    expect(refused.success).toBe(false);
+    expect(refused.remaining).toBe(10);
+    expect(refused.entry).toBeNull();
+
+    // Only the successful deduction should have produced a ledger entry.
+    const { entries } = await store.getLedger(bucket.id);
+    expect(entries).toHaveLength(1);
+  });
+
+  it("updateBucket should resolve the bucket via the reverse-lookup index", async () => {
+    const b1 = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    // A second owner ensures updateBucket picks the right bucket by id.
+    await store.createBucket("user-2", {
+      usageLimit: 200,
+      windowDurationMs: 1000,
+    });
+
+    const updated = await store.updateBucket(b1.id, { usageRemaining: 42 });
+    expect(updated.ownerId).toBe("user-1");
+    expect(updated.usageRemaining).toBe(42);
+
+    const other = await store.getBucket("user-2");
+    expect(other?.usageRemaining).toBe(200);
+  });
+
+  it("refillWindow should reset only when windowStart matches", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 60, "inference");
+
+    const refilled = await store.refillWindow(
+      bucket.id,
+      bucket.windowStart,
+      bucket.windowStart + 5000,
+    );
+    expect(refilled.usageRemaining).toBe(100);
+    expect(refilled.totalConsumed).toBe(0);
+
+    const noop = await store.refillWindow(
+      bucket.id,
+      bucket.windowStart,
+      bucket.windowStart + 9999,
+    );
+    expect(noop.windowStart).toBe(bucket.windowStart + 5000);
   });
 
   it("should return paginated ledger entries", async () => {
@@ -129,19 +183,11 @@ describe("UnstorageStore", () => {
     expect(page1.entries).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
 
-    const page2 = await store.getLedger(
-      bucket.id,
-      page1.nextCursor!,
-      2,
-    );
+    const page2 = await store.getLedger(bucket.id, page1.nextCursor!, 2);
     expect(page2.entries).toHaveLength(2);
     expect(page2.nextCursor).not.toBeNull();
 
-    const page3 = await store.getLedger(
-      bucket.id,
-      page2.nextCursor!,
-      2,
-    );
+    const page3 = await store.getLedger(bucket.id, page2.nextCursor!, 2);
     expect(page3.entries).toHaveLength(1);
     expect(page3.nextCursor).toBeNull();
   });
