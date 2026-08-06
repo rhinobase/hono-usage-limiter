@@ -4,6 +4,7 @@ import type {
   UsageStore,
   UsageDeductResult,
   UsageLedgerEntry,
+  UsagePaginatedBuckets,
   UsagePaginatedLedger,
 } from "./types";
 
@@ -157,6 +158,47 @@ export class MemoryStore implements UsageStore {
 
     return {
       entries: page,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
+  }
+
+  async resetAll(): Promise<number> {
+    const now = Date.now();
+    let count = 0;
+    for (const [id, bucket] of this.buckets) {
+      this.buckets.set(id, {
+        ...bucket,
+        usageRemaining: bucket.usageLimit,
+        totalConsumed: 0,
+        updatedAt: now,
+      });
+      count++;
+    }
+    return count;
+  }
+
+  async listBuckets(
+    cursor?: string,
+    limit = 50,
+  ): Promise<UsagePaginatedBuckets> {
+    // Stable order by bucket id so cursor pagination is deterministic.
+    const all = [...this.buckets.values()].sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
+
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIndex = all.findIndex((b) => b.id === cursor);
+      if (cursorIndex !== -1) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    const page = all.slice(startIndex, startIndex + limit).map((b) => ({ ...b }));
+    const hasMore = startIndex + limit < all.length;
+
+    return {
+      buckets: page,
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }

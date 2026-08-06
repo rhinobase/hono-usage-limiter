@@ -12,5 +12,6 @@ export type {
   UsageStoreFactory,
   UsageDeductResult,
   UsageLedgerEntry,
+  UsagePaginatedBuckets,
   UsagePaginatedLedger,
 } from "./types";

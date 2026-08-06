@@ -150,8 +150,32 @@ class MyStore implements UsageStore {
   updateBucket(bucketId, updates) { /* ... */ }
   deduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
   getLedger(bucketId, cursor?, limit?) { /* ... */ }
+  // Optional admin/bulk helpers (skip if your store is per-owner only):
+  resetAll?() { /* ... */ }
+  listBuckets?(cursor?, limit?) { /* ... */ }
 }
 ```
+
+### Admin / bulk operations
+
+For admin dashboards and "reset everyone" workflows, the built-in stores
+implement two optional store-level methods. They operate across **all** owners,
+so call them directly on the store instance (not the per-owner `UsageManager`):
+
+```typescript
+import { D1Store } from "hono-usage-limiter/d1";
+
+const store = new D1Store({ db: env.DB });
+
+// Refill every bucket back to its own limit; returns the count affected.
+const resetCount = await store.resetAll();
+
+// Paginate all buckets (cursor-based, ordered by id).
+const { buckets, nextCursor } = await store.listBuckets(undefined, 50);
+```
+
+Both are optional on the `UsageStore` interface — a custom per-owner store can
+omit them.
 
 ## API
 

@@ -165,6 +165,52 @@ describe("MemoryStore", () => {
     expect(entries[1].reason).toBe("second");
     expect(entries[2].reason).toBe("first");
   });
+
+  it("resetAll should refill every bucket to its own limit", async () => {
+    const a = await store.createBucket("user-a", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    const b = await store.createBucket("user-b", {
+      usageLimit: 500,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(a.id, "user-a", 40, "op");
+    await store.deduct(b.id, "user-b", 200, "op");
+
+    const count = await store.resetAll();
+    expect(count).toBe(2);
+
+    expect((await store.getBucket("user-a"))?.usageRemaining).toBe(100);
+    expect((await store.getBucket("user-a"))?.totalConsumed).toBe(0);
+    expect((await store.getBucket("user-b"))?.usageRemaining).toBe(500);
+  });
+
+  it("listBuckets should paginate across owners", async () => {
+    for (let i = 0; i < 5; i++) {
+      await store.createBucket(`user-${i}`, {
+        usageLimit: 100,
+        windowDurationMs: 1000,
+      });
+    }
+
+    const page1 = await store.listBuckets(undefined, 2);
+    expect(page1.buckets).toHaveLength(2);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await store.listBuckets(page1.nextCursor!, 2);
+    expect(page2.buckets).toHaveLength(2);
+
+    const page3 = await store.listBuckets(page2.nextCursor!, 2);
+    expect(page3.buckets).toHaveLength(1);
+    expect(page3.nextCursor).toBeNull();
+
+    // No overlap between pages.
+    const ids = [...page1.buckets, ...page2.buckets, ...page3.buckets].map(
+      (b) => b.id,
+    );
+    expect(new Set(ids).size).toBe(5);
+  });
 });
 
 describe("UsageManager", () => {

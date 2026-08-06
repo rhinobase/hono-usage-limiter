@@ -4,6 +4,7 @@ import type {
   UsageBucketProvisionOptions,
   UsageDeductResult,
   UsageLedgerEntry,
+  UsagePaginatedBuckets,
   UsagePaginatedLedger,
   UsageStore,
 } from "./types";
@@ -220,6 +221,56 @@ export class UnstorageStore implements UsageStore {
     return {
       entries,
       nextCursor: hasMore ? pageIds[pageIds.length - 1] : null,
+    };
+  }
+
+  /** Read every bucket by scanning the `bucket:` keyspace. */
+  private async getAllBuckets(): Promise<UsageBucket[]> {
+    const keys = await this.storage.getKeys(`${this.prefix}:bucket:`);
+    const buckets: UsageBucket[] = [];
+    for (const key of keys) {
+      const bucket = await this.storage.getItem<UsageBucket>(key);
+      if (bucket) buckets.push(bucket);
+    }
+    return buckets;
+  }
+
+  async resetAll(): Promise<number> {
+    const now = Date.now();
+    const buckets = await this.getAllBuckets();
+    for (const bucket of buckets) {
+      await this.storage.setItem(this.bucketKey(bucket.ownerId), {
+        ...bucket,
+        usageRemaining: bucket.usageLimit,
+        totalConsumed: 0,
+        updatedAt: now,
+      });
+    }
+    return buckets.length;
+  }
+
+  async listBuckets(
+    cursor?: string,
+    limit = 50,
+  ): Promise<UsagePaginatedBuckets> {
+    const all = (await this.getAllBuckets()).sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
+
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIndex = all.findIndex((b) => b.id === cursor);
+      if (cursorIndex !== -1) {
+        startIndex = cursorIndex + 1;
+      }
+    }
+
+    const page = all.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < all.length;
+
+    return {
+      buckets: page,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }
 }

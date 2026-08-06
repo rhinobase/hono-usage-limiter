@@ -5,6 +5,7 @@ import type {
   UsageBucketProvisionOptions,
   UsageDeductResult,
   UsageLedgerEntry,
+  UsagePaginatedBuckets,
   UsagePaginatedLedger,
   UsageStore,
 } from "./types";
@@ -333,6 +334,58 @@ export class D1Store implements UsageStore {
     return {
       entries,
       nextCursor: hasMore ? entries[entries.length - 1].id : null,
+    };
+  }
+
+  async resetAll(): Promise<number> {
+    const now = Date.now();
+    // Single set-based UPDATE across every bucket — no per-row iteration.
+    const result = await this.db
+      .prepare(
+        `UPDATE ${this.bucketsTable}
+          SET usage_remaining = usage_limit,
+              total_consumed = 0,
+              updated_at = ?`,
+      )
+      .bind(now)
+      .run();
+    return result.meta.changes ?? 0;
+  }
+
+  async listBuckets(
+    cursor?: string,
+    limit = 50,
+  ): Promise<UsagePaginatedBuckets> {
+    // Stable keyset pagination by id so the cursor is deterministic.
+    let query: string;
+    const values: unknown[] = [];
+
+    if (cursor) {
+      query = `SELECT * FROM ${this.bucketsTable}
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT ?`;
+      values.push(cursor, limit + 1);
+    } else {
+      query = `SELECT * FROM ${this.bucketsTable}
+        ORDER BY id ASC
+        LIMIT ?`;
+      values.push(limit + 1);
+    }
+
+    const result = await this.db
+      .prepare(query)
+      .bind(...values)
+      .all();
+
+    const rows = result.results as Record<string, unknown>[];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const buckets = pageRows.map((row) => this.rowToBucket(row));
+
+    return {
+      buckets,
+      nextCursor: hasMore ? buckets[buckets.length - 1].id : null,
     };
   }
 }

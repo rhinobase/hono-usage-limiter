@@ -162,6 +162,27 @@ describe("UnstorageStore", () => {
     expect(entries[2].reason).toBe("first");
   });
 
+  it("resetAll should refill every bucket and listBuckets should paginate", async () => {
+    for (let i = 0; i < 4; i++) {
+      const b = await store.createBucket(`user-${i}`, {
+        usageLimit: 100,
+        windowDurationMs: 1000,
+      });
+      await store.deduct(b.id, `user-${i}`, 30, "op");
+    }
+
+    const count = await store.resetAll();
+    expect(count).toBe(4);
+    expect((await store.getBucket("user-0"))?.usageRemaining).toBe(100);
+
+    const page1 = await store.listBuckets(undefined, 3);
+    expect(page1.buckets).toHaveLength(3);
+    expect(page1.nextCursor).not.toBeNull();
+    const page2 = await store.listBuckets(page1.nextCursor!, 3);
+    expect(page2.buckets).toHaveLength(1);
+    expect(page2.nextCursor).toBeNull();
+  });
+
   it("should support custom prefix", async () => {
     const storage = createStorage();
     const store1 = new UnstorageStore({ storage, prefix: "app1" });

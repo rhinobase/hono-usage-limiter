@@ -78,6 +78,14 @@ export type UsagePaginatedLedger = {
   nextCursor: string | null;
 };
 
+/** A page of usage buckets, for admin/bulk listing. */
+export type UsagePaginatedBuckets = {
+  /** Buckets for the current page */
+  buckets: UsageBucket[];
+  /** Cursor for the next page, or null if no more buckets */
+  nextCursor: string | null;
+};
+
 export type UsageBucketProvisionOptions = {
   /** Maximum usage units for the bucket */
   usageLimit: number;
@@ -146,6 +154,27 @@ export interface UsageStore {
     cursor?: string,
     limit?: number,
   ): Promise<UsagePaginatedLedger>;
+
+  /**
+   * Refill **every** bucket back to its own `usageLimit` in one operation, for
+   * admin "reset everyone" workflows. Sets `usageRemaining = usageLimit` and
+   * zeroes `totalConsumed`; window starts and ledger history are left intact.
+   * Returns the number of buckets affected.
+   *
+   * Optional — a per-owner-only store may leave it unimplemented.
+   */
+  resetAll?(): Promise<number>;
+
+  /**
+   * List buckets across all owners, paginated, for admin dashboards. Ordering
+   * is store-defined but must be stable for cursor pagination.
+   *
+   * Optional — a per-owner-only store may leave it unimplemented.
+   */
+  listBuckets?(
+    cursor?: string,
+    limit?: number,
+  ): Promise<UsagePaginatedBuckets>;
 }
 
 /**
