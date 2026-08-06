@@ -164,6 +164,7 @@ export class D1Store implements UsageStore {
         | "usageRemaining"
         | "usageLimit"
         | "windowStart"
+        | "windowDurationMs"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"
@@ -184,6 +185,10 @@ export class D1Store implements UsageStore {
     if (updates.windowStart !== undefined) {
       setClauses.push("window_start = ?");
       values.push(updates.windowStart);
+    }
+    if (updates.windowDurationMs !== undefined) {
+      setClauses.push("window_duration_ms = ?");
+      values.push(updates.windowDurationMs);
     }
     if (updates.totalConsumed !== undefined) {
       setClauses.push("total_consumed = ?");

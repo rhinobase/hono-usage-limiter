@@ -98,6 +98,7 @@ export class UnstorageStore implements UsageStore {
         | "usageRemaining"
         | "usageLimit"
         | "windowStart"
+        | "windowDurationMs"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"

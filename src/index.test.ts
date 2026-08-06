@@ -318,6 +318,71 @@ describe("UsageManager", () => {
     expect(statusAfter.hasUsage).toBe(true);
   });
 
+  it("should NOT adopt a changed defaultUsage on rollover by default", async () => {
+    // Provision a bucket at limit 100 with a short window.
+    const first = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+      defaultWindowDurationMs: 50,
+    });
+    await first.check();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // A new manager with a raised default but reconciliation OFF (default).
+    const second = new UsageManager("user-1", {
+      store,
+      defaultUsage: 2000,
+      defaultWindowDurationMs: 50,
+    });
+    const status = await second.check();
+    // Rollover refills from the bucket's stored limit (100), not the new code
+    // constant — the pre-existing behavior migration 0009 had to work around.
+    expect(status.remaining).toBe(100);
+    expect(status.limit).toBe(100);
+  });
+
+  it("should adopt a changed defaultUsage on rollover when reconcileLimit is on", async () => {
+    const first = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+      defaultWindowDurationMs: 50,
+    });
+    await first.check();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const second = new UsageManager("user-1", {
+      store,
+      defaultUsage: 2000,
+      defaultWindowDurationMs: 50,
+      reconcileLimit: true,
+    });
+    const status = await second.check();
+    // The expired window rolls over and adopts the new limit automatically.
+    expect(status.remaining).toBe(2000);
+    expect(status.limit).toBe(2000);
+  });
+
+  it("should not change the limit mid-window even with reconcileLimit on", async () => {
+    const first = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+      defaultWindowDurationMs: 60_000, // long window, won't expire
+    });
+    await first.deduct(30, "inference");
+
+    // A manager with a higher default but the window is still active.
+    const second = new UsageManager("user-1", {
+      store,
+      defaultUsage: 2000,
+      defaultWindowDurationMs: 60_000,
+      reconcileLimit: true,
+    });
+    const status = await second.check();
+    // No rollover happened, so the limit is untouched mid-window.
+    expect(status.limit).toBe(100);
+    expect(status.remaining).toBe(70);
+  });
+
   it("should throw on invalid deduct amount", async () => {
     const manager = new UsageManager("user-1", {
       store,

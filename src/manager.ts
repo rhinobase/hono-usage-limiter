@@ -16,6 +16,23 @@ export type UsageManagerOptions = {
   defaultUsage?: number;
   defaultWindowDurationMs?: number;
   autoProvision?: boolean;
+  /**
+   * When `true`, reconcile an existing bucket's `usageLimit` /
+   * `windowDurationMs` to the current `defaultUsage` / `defaultWindowDurationMs`
+   * on each window rollover.
+   *
+   * By default (`false`), window rollovers refill `usageRemaining` from the
+   * bucket's *stored* `usageLimit`, so raising `defaultUsage` in code does not
+   * affect buckets that were provisioned before the change — you'd have to
+   * migrate them by hand. With reconciliation enabled, the next rollover after
+   * a config change adopts the new limit/window automatically.
+   *
+   * Only affects the rollover path; it never changes `usageRemaining` mid-window
+   * and never lowers a bucket below what the current window already granted.
+   *
+   * @default false
+   */
+  reconcileLimit?: boolean;
 };
 
 export class UsageManager {
@@ -23,6 +40,7 @@ export class UsageManager {
   private defaultUsage: number;
   private defaultWindowDurationMs: number;
   private autoProvision: boolean;
+  private reconcileLimit: boolean;
   private bucket: UsageBucket | null = null;
   private ownerId: string;
 
@@ -32,6 +50,7 @@ export class UsageManager {
     this.defaultUsage = config.defaultUsage ?? 1000;
     this.defaultWindowDurationMs = config.defaultWindowDurationMs ?? THIRTY_DAYS_MS;
     this.autoProvision = config.autoProvision ?? true;
+    this.reconcileLimit = config.reconcileLimit ?? false;
   }
 
   /**
@@ -53,15 +72,27 @@ export class UsageManager {
       });
     }
 
-    // Auto-refill: if the window has expired, reset the bucket
+    // Auto-refill: if the window has expired, reset the bucket. When
+    // `reconcileLimit` is enabled, the fresh window also adopts the current
+    // `defaultUsage` / `defaultWindowDurationMs`, so a config change propagates
+    // to existing buckets on their next rollover (no manual migration needed).
     const windowEnd =
       this.bucket.windowStart + this.bucket.windowDurationMs;
     if (Date.now() >= windowEnd) {
+      const now = Date.now();
+      const nextLimit = this.reconcileLimit
+        ? this.defaultUsage
+        : this.bucket.usageLimit;
+      const nextWindowDurationMs = this.reconcileLimit
+        ? this.defaultWindowDurationMs
+        : this.bucket.windowDurationMs;
       this.bucket = await this.store.updateBucket(this.bucket.id, {
-        usageRemaining: this.bucket.usageLimit,
-        windowStart: Date.now(),
+        usageRemaining: nextLimit,
+        usageLimit: nextLimit,
+        windowStart: now,
+        windowDurationMs: nextWindowDurationMs,
         totalConsumed: 0,
-        updatedAt: Date.now(),
+        updatedAt: now,
       });
     }
 

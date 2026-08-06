@@ -169,6 +169,13 @@ Hono middleware that injects a `UsageManager` onto the context as `c.get("usage"
 | `defaultWindowDurationMs` | `number` | `2592000000` (30 days) | Default rolling window duration |
 | `autoProvision` | `boolean` | `true` | Auto-create bucket if none exists |
 
+> **Changing limits over time:** by default, raising `defaultUsage` in code only
+> affects *new* buckets — existing buckets refill from their own stored
+> `usageLimit` on rollover. Set `reconcileLimit: true` so the next window
+> rollover adopts the current `defaultUsage`/`defaultWindowDurationMs`
+> automatically (it never changes a bucket mid-window). This is passed through
+> `usageManager({ ... })` and the `UsageManager` constructor.
+
 ### `UsageManager`
 
 Available via `c.get("usage")` in your handlers:

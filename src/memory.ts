@@ -66,6 +66,7 @@ export class MemoryStore implements UsageStore {
         | "usageRemaining"
         | "usageLimit"
         | "windowStart"
+        | "windowDurationMs"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"

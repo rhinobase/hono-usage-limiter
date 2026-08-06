@@ -117,6 +117,7 @@ export interface UsageStore {
         | "usageRemaining"
         | "usageLimit"
         | "windowStart"
+        | "windowDurationMs"
         | "totalConsumed"
         | "lastConsumedAt"
         | "updatedAt"
@@ -186,4 +187,12 @@ export type UsageManagerConfig = {
   keyGenerator: (c: unknown) => string | Promise<string>;
   /** Whether to auto-provision a bucket if one doesn't exist (default: true) */
   autoProvision?: boolean;
+  /**
+   * When `true`, reconcile an existing bucket's `usageLimit` /
+   * `windowDurationMs` to the current `defaultUsage` / `defaultWindowDurationMs`
+   * on each window rollover, so a raised default propagates to old buckets
+   * automatically instead of requiring a manual migration. Never changes a
+   * bucket mid-window. (default: false)
+   */
+  reconcileLimit?: boolean;
 };
