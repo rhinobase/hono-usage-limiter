@@ -4,6 +4,7 @@ import type {
   UsageBucket,
   UsageStatus,
   UsageStore,
+  UsageCreditResult,
   UsageDeductResult,
   UsagePaginatedLedger,
 } from "./types";
@@ -114,6 +115,49 @@ export class UsageManager {
       usageRemaining: result.remaining,
       totalConsumed: bucket.totalConsumed + amount,
       lastConsumedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    return result;
+  }
+
+  /**
+   * Credit (refund) usage back to the bucket — the inverse of {@link deduct}.
+   *
+   * Use this to give units back after a failed or cancelled operation. It adds
+   * `amount` to `usageRemaining`, subtracts it from `totalConsumed`, and records
+   * a ledger entry with a negative amount so the ledger nets out to true
+   * consumption.
+   *
+   * Throws if the configured store doesn't implement `credit`.
+   */
+  async credit(
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult> {
+    if (amount <= 0 || !Number.isFinite(amount)) {
+      throw new Error("Credit amount must be a positive finite number");
+    }
+
+    if (!this.store.credit) {
+      throw new Error("The configured store does not support credit()");
+    }
+
+    const bucket = await this.resolveBucket();
+    const result = await this.store.credit(
+      bucket.id,
+      this.ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    // Update the cached bucket
+    this.bucket = {
+      ...bucket,
+      usageRemaining: result.remaining,
+      totalConsumed: bucket.totalConsumed - amount,
       updatedAt: Date.now(),
     };
 

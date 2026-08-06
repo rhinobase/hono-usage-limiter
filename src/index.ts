@@ -11,6 +11,7 @@ export type {
   UsageStore,
   UsageStoreFactory,
   UsageDeductResult,
+  UsageCreditResult,
   UsageLedgerEntry,
   UsagePaginatedLedger,
 } from "./types";

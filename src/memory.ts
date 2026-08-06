@@ -2,6 +2,7 @@ import type {
   UsageBucketProvisionOptions,
   UsageBucket,
   UsageStore,
+  UsageCreditResult,
   UsageDeductResult,
   UsageLedgerEntry,
   UsagePaginatedLedger,
@@ -129,6 +130,51 @@ export class MemoryStore implements UsageStore {
 
     return {
       success: true,
+      remaining,
+      entry,
+    };
+  }
+
+  async credit(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult> {
+    const bucket = this.buckets.get(bucketId);
+    if (!bucket) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
+    const now = Date.now();
+
+    // A credit is the inverse of a deduction: the ledger amount is negative so
+    // SUM(amount) stays equal to net consumption.
+    const entry: UsageLedgerEntry = {
+      id: generateId(),
+      bucketId,
+      ownerId,
+      amount: -amount,
+      reason,
+      metadata: metadata ?? null,
+      createdAt: now,
+    };
+
+    const remaining = bucket.usageRemaining + amount;
+    const updated: UsageBucket = {
+      ...bucket,
+      usageRemaining: remaining,
+      totalConsumed: bucket.totalConsumed - amount,
+      updatedAt: now,
+    };
+    this.buckets.set(bucketId, updated);
+
+    const entries = this.ledger.get(bucketId) ?? [];
+    entries.push(entry);
+    this.ledger.set(bucketId, entries);
+
+    return {
       remaining,
       entry,
     };

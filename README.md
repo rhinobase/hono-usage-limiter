@@ -150,6 +150,8 @@ class MyStore implements UsageStore {
   updateBucket(bucketId, updates) { /* ... */ }
   deduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
   getLedger(bucketId, cursor?, limit?) { /* ... */ }
+  // Optional: enables UsageManager.credit() (refunds).
+  credit?(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
 }
 ```
 
@@ -177,6 +179,7 @@ Available via `c.get("usage")` in your handlers:
 |---|---|
 | `check()` | Returns `UsageStatus` with `remaining`, `limit`, `hasUsage`, `resetsAt` |
 | `deduct(amount, reason, metadata?)` | Deducts usage and records a ledger entry |
+| `credit(amount, reason, metadata?)` | Refunds usage back (inverse of `deduct`); records a ledger entry with a negative amount. Requires a store that implements `credit` |
 | `getBalance()` | Returns full `UsageBalanceInfo` including `totalConsumed` and window timestamps |
 | `getHistory(cursor?, limit?)` | Returns paginated ledger entries (newest first) |
 | `reset()` | Refills usage to the limit and starts a new window |

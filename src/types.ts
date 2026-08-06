@@ -71,6 +71,21 @@ export type UsageDeductResult = {
   entry: UsageLedgerEntry;
 };
 
+/**
+ * Result of a {@link UsageStore.credit} / {@link UsageManager.credit} — adding
+ * usage units back to a bucket (e.g. refunding a failed operation).
+ */
+export type UsageCreditResult = {
+  /** Usage units remaining after the credit. */
+  remaining: number;
+  /**
+   * The ledger entry created for this credit. Its `amount` is negative (the
+   * inverse of a deduction), so `SUM(amount)` over the ledger stays equal to
+   * net consumption.
+   */
+  entry: UsageLedgerEntry;
+};
+
 export type UsagePaginatedLedger = {
   /** Ledger entries for the current page */
   entries: UsageLedgerEntry[];
@@ -136,6 +151,24 @@ export interface UsageStore {
     reason: string,
     metadata?: Record<string, unknown>,
   ): Promise<UsageDeductResult>;
+
+  /**
+   * Add usage units back to a bucket (e.g. refund a failed operation) and
+   * record it in the ledger, atomically.
+   *
+   * Optional. Should increment `usageRemaining` by `amount`, decrement
+   * `totalConsumed` by `amount` (so net consumption stays accurate), and insert
+   * a ledger entry whose `amount` is **negative** (`-amount`) in a single
+   * transaction. When a store doesn't implement this, {@link UsageManager.credit}
+   * throws.
+   */
+  credit?(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult>;
 
   /**
    * Get paginated ledger entries for a bucket.

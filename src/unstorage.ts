@@ -2,6 +2,7 @@ import type { Storage } from "unstorage";
 import type {
   UsageBucket,
   UsageBucketProvisionOptions,
+  UsageCreditResult,
   UsageDeductResult,
   UsageLedgerEntry,
   UsagePaginatedLedger,
@@ -180,6 +181,56 @@ export class UnstorageStore implements UsageStore {
 
     return {
       success: true,
+      remaining,
+      entry,
+    };
+  }
+
+  async credit(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult> {
+    const bucket = await this.getBucket(ownerId);
+    if (!bucket || bucket.id !== bucketId) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
+    const now = Date.now();
+
+    // Inverse of deduct: add back to remaining, subtract from total_consumed,
+    // and record a ledger entry with a NEGATIVE amount.
+    const entry: UsageLedgerEntry = {
+      id: generateId(),
+      bucketId,
+      ownerId,
+      amount: -amount,
+      reason,
+      metadata: metadata ?? null,
+      createdAt: now,
+    };
+
+    const remaining = bucket.usageRemaining + amount;
+    const updated: UsageBucket = {
+      ...bucket,
+      usageRemaining: remaining,
+      totalConsumed: bucket.totalConsumed - amount,
+      updatedAt: now,
+    };
+
+    await this.storage.setItem(this.bucketKey(ownerId), updated);
+    await this.storage.setItem(this.ledgerKey(bucketId, entry.id), entry);
+
+    const index =
+      (await this.storage.getItem<string[]>(
+        this.ledgerIndexKey(bucketId),
+      )) ?? [];
+    index.unshift(entry.id);
+    await this.storage.setItem(this.ledgerIndexKey(bucketId), index);
+
+    return {
       remaining,
       entry,
     };

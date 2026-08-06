@@ -3,6 +3,7 @@
 import type {
   UsageBucket,
   UsageBucketProvisionOptions,
+  UsageCreditResult,
   UsageDeductResult,
   UsageLedgerEntry,
   UsagePaginatedLedger,
@@ -272,6 +273,63 @@ export class D1Store implements UsageStore {
 
     return {
       success: true,
+      remaining,
+      entry,
+    };
+  }
+
+  async credit(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult> {
+    const now = Date.now();
+    const entryId = generateId();
+    const metadataJson = metadata ? JSON.stringify(metadata) : null;
+
+    // Inverse of deduct: add back to usage_remaining, subtract from
+    // total_consumed, and record a ledger entry with a NEGATIVE amount so
+    // SUM(amount) over the ledger stays equal to net consumption.
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE ${this.bucketsTable}
+            SET usage_remaining = usage_remaining + ?,
+                total_consumed = total_consumed - ?,
+                updated_at = ?
+            WHERE id = ?`,
+        )
+        .bind(amount, amount, now, bucketId),
+      this.db
+        .prepare(
+          `INSERT INTO ${this.ledgerTable}
+            (id, bucket_id, owner_id, amount, reason, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(entryId, bucketId, ownerId, -amount, reason, metadataJson, now),
+      this.db
+        .prepare(
+          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`,
+        )
+        .bind(bucketId),
+    ]);
+
+    const selectResult = results[2] as D1Result<Record<string, unknown>>;
+    const remaining = (selectResult.results[0]?.usage_remaining as number) ?? 0;
+
+    const entry: UsageLedgerEntry = {
+      id: entryId,
+      bucketId,
+      ownerId,
+      amount: -amount,
+      reason,
+      metadata: metadata ?? null,
+      createdAt: now,
+    };
+
+    return {
       remaining,
       entry,
     };

@@ -98,6 +98,32 @@ describe("MemoryStore", () => {
     expect(result.entry.metadata).toEqual({ inputTokens: 30 });
   });
 
+  it("should credit (refund) usage back with a negative ledger entry", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 1000,
+      windowDurationMs: 1000,
+    });
+
+    await store.deduct(bucket.id, "user-1", 100, "inference");
+    const result = await store.credit(bucket.id, "user-1", 40, "refund", {
+      reason: "op failed",
+    });
+
+    expect(result.remaining).toBe(940); // 1000 - 100 + 40
+    expect(result.entry.amount).toBe(-40); // negative = inverse of a deduction
+    expect(result.entry.reason).toBe("refund");
+
+    const after = await store.getBucket("user-1");
+    expect(after?.usageRemaining).toBe(940);
+    // total_consumed nets out: 100 consumed - 40 refunded = 60
+    expect(after?.totalConsumed).toBe(60);
+
+    // Ledger SUM(amount) equals net consumption.
+    const { entries } = await store.getLedger(bucket.id);
+    const net = entries.reduce((sum, e) => sum + e.amount, 0);
+    expect(net).toBe(60);
+  });
+
   it("should allow going negative", async () => {
     const bucket = await store.createBucket("user-1", {
       usageLimit: 10,
@@ -216,6 +242,54 @@ describe("UsageManager", () => {
 
     const status = await manager.check();
     expect(status.remaining).toBe(70);
+  });
+
+  it("should credit usage back through the manager", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 100,
+    });
+
+    await manager.deduct(60, "inference");
+    expect((await manager.check()).remaining).toBe(40);
+
+    const result = await manager.credit(25, "refund");
+    expect(result.remaining).toBe(65);
+    expect(result.entry.amount).toBe(-25);
+
+    const balance = await manager.getBalance();
+    expect(balance.remaining).toBe(65);
+    expect(balance.totalConsumed).toBe(35); // 60 - 25
+  });
+
+  it("should throw on invalid credit amounts", async () => {
+    const manager = new UsageManager("user-1", { store, defaultUsage: 100 });
+    await expect(manager.credit(0, "refund")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+    await expect(manager.credit(-5, "refund")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+  });
+
+  it("should throw when the store does not support credit", async () => {
+    // A minimal store without a `credit` method.
+    const storeWithoutCredit = {
+      getBucket: store.getBucket.bind(store),
+      createBucket: store.createBucket.bind(store),
+      updateBucket: store.updateBucket.bind(store),
+      deduct: store.deduct.bind(store),
+      getLedger: store.getLedger.bind(store),
+    };
+    const manager = new UsageManager("user-1", {
+      store: storeWithoutCredit,
+      defaultUsage: 100,
+    });
+    await manager.check();
+
+    await expect(manager.credit(10, "refund")).rejects.toThrow(
+      "The configured store does not support credit()",
+    );
   });
 
   it("should return full balance info", async () => {

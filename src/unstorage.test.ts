@@ -162,6 +162,23 @@ describe("UnstorageStore", () => {
     expect(entries[2].reason).toBe("first");
   });
 
+  it("should credit (refund) usage back with a negative ledger entry", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 1000,
+      windowDurationMs: 1000,
+    });
+
+    await store.deduct(bucket.id, "user-1", 100, "inference");
+    const result = await store.credit(bucket.id, "user-1", 40, "refund");
+
+    expect(result.remaining).toBe(940);
+    expect(result.entry.amount).toBe(-40);
+
+    const after = await store.getBucket("user-1");
+    expect(after?.usageRemaining).toBe(940);
+    expect(after?.totalConsumed).toBe(60);
+  });
+
   it("should support custom prefix", async () => {
     const storage = createStorage();
     const store1 = new UnstorageStore({ storage, prefix: "app1" });
