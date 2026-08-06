@@ -165,6 +165,35 @@ describe("MemoryStore", () => {
     expect(entries[1].reason).toBe("second");
     expect(entries[2].reason).toBe("first");
   });
+
+  it("should clamp an oversized getLedger limit to the max", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100000,
+      windowDurationMs: 1000,
+    });
+
+    // Create more than MAX_LEDGER_LIMIT (100) entries.
+    for (let i = 0; i < 120; i++) {
+      await store.deduct(bucket.id, "user-1", 1, `op-${i}`);
+    }
+
+    // A caller asking for way more than the max only gets the max back.
+    const page = await store.getLedger(bucket.id, undefined, 100000);
+    expect(page.entries).toHaveLength(100);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it("should treat a getLedger limit below 1 as 1", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 1000,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 10, "a");
+    await store.deduct(bucket.id, "user-1", 10, "b");
+
+    const page = await store.getLedger(bucket.id, undefined, 0);
+    expect(page.entries).toHaveLength(1);
+  });
 });
 
 describe("UsageManager", () => {
@@ -216,6 +245,24 @@ describe("UsageManager", () => {
 
     const status = await manager.check();
     expect(status.remaining).toBe(70);
+  });
+
+  it("should accept a typed reason union and reject unknown reasons at compile time", async () => {
+    const manager = new UsageManager<"inference" | "cleanup">("user-1", {
+      store,
+      defaultUsage: 100,
+    });
+
+    const ok = await manager.deduct(10, "inference");
+    expect(ok.success).toBe(true);
+
+    // @ts-expect-error "inferance" is not part of the Reason union.
+    await manager.deduct(10, "inferance");
+
+    // A plain (non-parameterized) manager still accepts any string.
+    const loose = new UsageManager("user-2", { store, defaultUsage: 100 });
+    const looseResult = await loose.deduct(10, "anything-goes");
+    expect(looseResult.success).toBe(true);
   });
 
   it("should return full balance info", async () => {

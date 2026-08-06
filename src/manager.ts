@@ -18,7 +18,20 @@ export type UsageManagerOptions = {
   autoProvision?: boolean;
 };
 
-export class UsageManager {
+/**
+ * Manages the usage bucket for a single owner.
+ *
+ * The optional `Reason` type parameter constrains the `reason` accepted by
+ * {@link UsageManager.deduct} to a known union of strings, catching typos at
+ * compile time. It defaults to `string`, so existing usage is unaffected:
+ *
+ * ```ts
+ * const usage = new UsageManager<"inference" | "cleanup">(ownerId, { store });
+ * usage.deduct(30, "inference"); // ok
+ * usage.deduct(30, "inferance"); // type error
+ * ```
+ */
+export class UsageManager<Reason extends string = string> {
   private store: UsageStore;
   private defaultUsage: number;
   private defaultWindowDurationMs: number;
@@ -92,7 +105,7 @@ export class UsageManager {
    */
   async deduct(
     amount: number,
-    reason: string,
+    reason: Reason,
     metadata?: Record<string, unknown>,
   ): Promise<UsageDeductResult> {
     if (amount <= 0 || !Number.isFinite(amount)) {

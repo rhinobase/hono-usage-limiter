@@ -1,3 +1,4 @@
+import { clampLedgerLimit } from "./pagination";
 import type {
   UsageBucketProvisionOptions,
   UsageBucket,
@@ -137,8 +138,9 @@ export class MemoryStore implements UsageStore {
   async getLedger(
     bucketId: string,
     cursor?: string,
-    limit = 20,
+    limit?: number,
   ): Promise<UsagePaginatedLedger> {
+    const pageSize = clampLedgerLimit(limit);
     const entries = this.ledger.get(bucketId) ?? [];
 
     // Reverse to get newest first (entries are appended in insertion order)
@@ -152,8 +154,8 @@ export class MemoryStore implements UsageStore {
       }
     }
 
-    const page = sorted.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < sorted.length;
+    const page = sorted.slice(startIndex, startIndex + pageSize);
+    const hasMore = startIndex + pageSize < sorted.length;
 
     return {
       entries: page,

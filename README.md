@@ -178,9 +178,22 @@ Available via `c.get("usage")` in your handlers:
 | `check()` | Returns `UsageStatus` with `remaining`, `limit`, `hasUsage`, `resetsAt` |
 | `deduct(amount, reason, metadata?)` | Deducts usage and records a ledger entry |
 | `getBalance()` | Returns full `UsageBalanceInfo` including `totalConsumed` and window timestamps |
-| `getHistory(cursor?, limit?)` | Returns paginated ledger entries (newest first) |
+| `getHistory(cursor?, limit?)` | Returns paginated ledger entries (newest first). `limit` is clamped to `[1, 100]` (default `20`) |
 | `reset()` | Refills usage to the limit and starts a new window |
 | `provision(options)` | Creates or updates a bucket with new plan settings |
+
+### Typed reasons (optional)
+
+`UsageManager` takes an optional `Reason` type parameter that constrains the
+`reason` string passed to `deduct()`, catching typos at compile time. It
+defaults to `string`, so it's fully opt-in:
+
+```typescript
+const usage = new UsageManager<"inference" | "cleanup">(ownerId, { store });
+
+usage.deduct(30, "inference"); // ok
+usage.deduct(30, "inferance"); // type error
+```
 
 ## Contributing
 

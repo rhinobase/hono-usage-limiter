@@ -1,4 +1,5 @@
 import type { Storage } from "unstorage";
+import { clampLedgerLimit } from "./pagination";
 import type {
   UsageBucket,
   UsageBucketProvisionOptions,
@@ -188,8 +189,9 @@ export class UnstorageStore implements UsageStore {
   async getLedger(
     bucketId: string,
     cursor?: string,
-    limit = 20,
+    limit?: number,
   ): Promise<UsagePaginatedLedger> {
+    const pageSize = clampLedgerLimit(limit);
     const index =
       (await this.storage.getItem<string[]>(
         this.ledgerIndexKey(bucketId),
@@ -203,7 +205,7 @@ export class UnstorageStore implements UsageStore {
       }
     }
 
-    const pageIds = index.slice(startIndex, startIndex + limit);
+    const pageIds = index.slice(startIndex, startIndex + pageSize);
     const entries: UsageLedgerEntry[] = [];
 
     for (const id of pageIds) {
@@ -215,7 +217,7 @@ export class UnstorageStore implements UsageStore {
       }
     }
 
-    const hasMore = startIndex + limit < index.length;
+    const hasMore = startIndex + pageSize < index.length;
 
     return {
       entries,

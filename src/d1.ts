@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { clampLedgerLimit } from "./pagination";
 import type {
   UsageBucket,
   UsageBucketProvisionOptions,
@@ -280,8 +281,9 @@ export class D1Store implements UsageStore {
   async getLedger(
     bucketId: string,
     cursor?: string,
-    limit = 20,
+    limit?: number,
   ): Promise<UsagePaginatedLedger> {
+    const pageSize = clampLedgerLimit(limit);
     let query: string;
     const values: unknown[] = [bucketId];
 
@@ -303,21 +305,21 @@ export class D1Store implements UsageStore {
           cursorRow.created_at,
           cursorRow.created_at,
           cursor,
-          limit + 1,
+          pageSize + 1,
         );
       } else {
         query = `SELECT * FROM ${this.ledgerTable}
           WHERE bucket_id = ?
           ORDER BY created_at DESC, id DESC
           LIMIT ?`;
-        values.push(limit + 1);
+        values.push(pageSize + 1);
       }
     } else {
       query = `SELECT * FROM ${this.ledgerTable}
         WHERE bucket_id = ?
         ORDER BY created_at DESC, id DESC
         LIMIT ?`;
-      values.push(limit + 1);
+      values.push(pageSize + 1);
     }
 
     const result = await this.db
@@ -326,8 +328,8 @@ export class D1Store implements UsageStore {
       .all();
 
     const rows = result.results as Record<string, unknown>[];
-    const hasMore = rows.length > limit;
-    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const hasMore = rows.length > pageSize;
+    const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
     const entries = pageRows.map((row) => this.rowToLedgerEntry(row));
 
     return {

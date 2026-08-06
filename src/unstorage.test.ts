@@ -162,6 +162,21 @@ describe("UnstorageStore", () => {
     expect(entries[2].reason).toBe("first");
   });
 
+  it("should clamp an oversized getLedger limit to the max", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100000,
+      windowDurationMs: 1000,
+    });
+
+    for (let i = 0; i < 120; i++) {
+      await store.deduct(bucket.id, "user-1", 1, `op-${i}`);
+    }
+
+    const page = await store.getLedger(bucket.id, undefined, 100000);
+    expect(page.entries).toHaveLength(100);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
   it("should support custom prefix", async () => {
     const storage = createStorage();
     const store1 = new UnstorageStore({ storage, prefix: "app1" });
