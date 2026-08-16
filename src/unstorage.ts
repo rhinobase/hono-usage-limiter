@@ -89,7 +89,10 @@ export class UnstorageStore<Reason extends string = string>
       this.bucketOwnerKey(bucketId),
     );
     if (ownerId) {
-      return (await this.storage.getItem<UsageBucket>(this.bucketKey(ownerId))) ?? null;
+      return (
+        (await this.storage.getItem<UsageBucket>(this.bucketKey(ownerId))) ??
+        null
+      );
     }
 
     const bucketKeyPrefix = this.bucketKeyPrefix();
@@ -133,8 +136,9 @@ export class UnstorageStore<Reason extends string = string>
   }
 
   async getBucket(ownerId: string): Promise<UsageBucket | null> {
-    const bucket =
-      await this.storage.getItem<UsageBucket>(this.bucketKey(ownerId));
+    const bucket = await this.storage.getItem<UsageBucket>(
+      this.bucketKey(ownerId),
+    );
     return bucket ?? null;
   }
 
@@ -144,9 +148,7 @@ export class UnstorageStore<Reason extends string = string>
   ): Promise<UsageBucket> {
     const existing = await this.getBucket(ownerId);
     if (existing) {
-      throw new Error(
-        `Usage bucket already exists for owner "${ownerId}"`,
-      );
+      throw new Error(`Usage bucket already exists for owner "${ownerId}"`);
     }
 
     const now = Date.now();
@@ -308,10 +310,13 @@ export class UnstorageStore<Reason extends string = string>
     limit?: number,
   ): Promise<UsagePaginatedLedger<Reason>> {
     const pageLimit = normalizePageLimit(limit);
+    if (!(await this.findBucketById(bucketId))) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
     const index =
-      (await this.storage.getItem<string[]>(
-        this.ledgerIndexKey(bucketId),
-      )) ?? [];
+      (await this.storage.getItem<string[]>(this.ledgerIndexKey(bucketId))) ??
+      [];
 
     let startIndex = 0;
     if (cursor) {
@@ -321,10 +326,14 @@ export class UnstorageStore<Reason extends string = string>
       }
     }
 
-    const pageIds = index.slice(startIndex, startIndex + pageLimit + 1);
     const entries: UsageLedgerEntry<Reason>[] = [];
 
-    for (const id of pageIds) {
+    for (
+      let indexPosition = startIndex;
+      indexPosition < index.length && entries.length < pageLimit + 1;
+      indexPosition++
+    ) {
+      const id = index[indexPosition];
       const entry = await this.storage.getItem<UsageLedgerEntry<Reason>>(
         this.ledgerKey(bucketId, id),
       );

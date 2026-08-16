@@ -305,6 +305,7 @@ describe("D1Store", () => {
 
   it("normalizes ledger page limits before binding SQL values", async () => {
     const recorder = new D1Recorder();
+    recorder.firstResponses.push({ id: "bucket-1" });
     recorder.allResponses.push(
       result([
         {
@@ -331,8 +332,23 @@ describe("D1Store", () => {
 
     const page = await store.getLedger("bucket-1", undefined, -5);
 
-    expect(recorder.statements[0].bindings).toEqual(["bucket-1", 2]);
+    expect(recorder.statements[1].bindings).toEqual(["bucket-1", 2]);
     expect(page.entries.map((entry) => entry.id)).toEqual(["entry-2"]);
     expect(page.nextCursor).toBe("entry-2");
+  });
+
+  it("throws the documented not-found error before querying a missing bucket ledger", async () => {
+    const recorder = new D1Recorder();
+    recorder.firstResponses.push(null);
+    const store = new D1Store({ db: recorder.asDatabase() });
+
+    await expect(store.getLedger("missing-bucket")).rejects.toThrow(
+      'Usage bucket "missing-bucket" not found',
+    );
+    expect(squash(recorder.statements[0].sql)).toBe(
+      "SELECT id FROM usage_buckets WHERE id = ? LIMIT 1",
+    );
+    expect(recorder.statements[0].bindings).toEqual(["missing-bucket"]);
+    expect(recorder.statements).toHaveLength(1);
   });
 });

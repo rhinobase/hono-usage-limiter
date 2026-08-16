@@ -41,6 +41,7 @@ export class CachedUsageStore<Reason extends string = string>
   private readonly cache: UsageCache;
   private readonly inner: UsageStore<Reason>;
   private readonly prefix: string;
+  private localEpoch: string | null = null;
 
   constructor(options: CachedUsageStoreOptions<Reason>) {
     this.inner = options.inner;
@@ -57,6 +58,8 @@ export class CachedUsageStore<Reason extends string = string>
   }
 
   private async getEpoch(): Promise<string> {
+    if (this.localEpoch) return this.localEpoch;
+
     const epoch = await this.cache.get<string>(this.epochKey());
     if (epoch !== null && epoch !== undefined) return epoch;
 
@@ -191,9 +194,40 @@ export class CachedUsageStore<Reason extends string = string>
   }
 
   async resetAll(): Promise<number> {
-    const count = await this.inner.resetAll();
-    await this.cache.set(this.epochKey(), generateEpoch());
-    return count;
+    let count: number | undefined;
+    let resetFailure: unknown;
+    try {
+      count = await this.inner.resetAll();
+    } catch (error) {
+      resetFailure = error;
+    }
+
+    const nextEpoch = generateEpoch();
+    this.localEpoch = nextEpoch;
+    let invalidationFailure: unknown;
+    try {
+      await this.cache.set(this.epochKey(), nextEpoch);
+      if (this.localEpoch === nextEpoch) this.localEpoch = null;
+    } catch (error) {
+      invalidationFailure = error;
+    }
+
+    if (resetFailure !== undefined) {
+      if (invalidationFailure !== undefined) {
+        throw new AggregateError(
+          [resetFailure, invalidationFailure],
+          "Usage reset and cache invalidation both failed",
+        );
+      }
+      throw resetFailure;
+    }
+    if (invalidationFailure !== undefined) {
+      throw new Error("Usage reset succeeded, but cache invalidation failed", {
+        cause: invalidationFailure,
+      });
+    }
+
+    return count as number;
   }
 
   async listBuckets(

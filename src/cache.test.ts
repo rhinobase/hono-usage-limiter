@@ -4,12 +4,18 @@ import { MemoryStore } from "./memory";
 
 class InMemoryUsageCache implements UsageCache {
   readonly entries = new Map<string, unknown>();
+  failNextEpochSetWith: Error | null = null;
 
   async get<Value>(key: string): Promise<Value | null> {
     return (this.entries.get(key) as Value | undefined) ?? null;
   }
 
   async set<Value>(key: string, value: Value): Promise<void> {
+    if (key.endsWith(":epoch") && this.failNextEpochSetWith) {
+      const error = this.failNextEpochSetWith;
+      this.failNextEpochSetWith = null;
+      throw error;
+    }
     this.entries.set(key, value);
   }
 
@@ -142,5 +148,63 @@ describe("CachedUsageStore", () => {
       usageRemaining: 20,
     });
     expect(getBucket).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates cached buckets when the inner reset partially succeeds then throws", async () => {
+    const { inner, store } = createCachedStore();
+    const bucket = await inner.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await inner.deduct(bucket.id, "user-1", 3, "inference");
+    await store.getBucket("user-1");
+    const resetError = new Error("reset stopped after first bucket");
+    vi.spyOn(inner, "resetAll").mockImplementation(async () => {
+      await inner.updateBucket(bucket.id, {
+        usageRemaining: bucket.usageLimit,
+        totalConsumed: 0,
+      });
+      throw resetError;
+    });
+
+    await expect(store.resetAll()).rejects.toBe(resetError);
+
+    const getBucket = vi.spyOn(inner, "getBucket");
+    await expect(store.getBucket("user-1")).resolves.toMatchObject({
+      usageRemaining: 10,
+      totalConsumed: 0,
+    });
+    expect(getBucket).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps stale buckets unreachable when persisting the reset epoch fails", async () => {
+    const { cache, inner, store } = createCachedStore();
+    const bucket = await inner.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await inner.deduct(bucket.id, "user-1", 3, "inference");
+    await store.getBucket("user-1");
+    const epochError = new Error("cache unavailable");
+    cache.failNextEpochSetWith = epochError;
+
+    let thrown: unknown;
+    try {
+      await store.resetAll();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(
+      "Usage reset succeeded, but cache invalidation failed",
+    );
+    expect((thrown as Error).cause).toBe(epochError);
+
+    const getBucket = vi.spyOn(inner, "getBucket");
+    await expect(store.getBucket("user-1")).resolves.toMatchObject({
+      usageRemaining: 10,
+      totalConsumed: 0,
+    });
+    expect(getBucket).toHaveBeenCalledTimes(1);
   });
 });

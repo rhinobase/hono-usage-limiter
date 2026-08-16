@@ -1,8 +1,14 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { usageManager, type UsageEnv } from "./middleware";
 import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
+import { type UsageEnv, usageManager } from "./middleware";
+
+function requireCursor(cursor: string | null): string {
+  expect(cursor).not.toBeNull();
+  if (cursor === null) throw new Error("Expected a pagination cursor");
+  return cursor;
+}
 
 describe("MemoryStore", () => {
   let store: MemoryStore;
@@ -83,13 +89,9 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      30,
-      "inference",
-      { inputTokens: 30 },
-    );
+    const result = await store.deduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
@@ -104,12 +106,7 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      25,
-      "inference",
-    );
+    const result = await store.deduct(bucket.id, "user-1", 25, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(-15);
@@ -129,21 +126,19 @@ describe("MemoryStore", () => {
     // Get first page (limit 2)
     const page1 = await store.getLedger(bucket.id, undefined, 2);
     expect(page1.entries).toHaveLength(2);
-    expect(page1.nextCursor).not.toBeNull();
 
     // Get second page
     const page2 = await store.getLedger(
       bucket.id,
-      page1.nextCursor!,
+      requireCursor(page1.nextCursor),
       2,
     );
     expect(page2.entries).toHaveLength(2);
-    expect(page2.nextCursor).not.toBeNull();
 
     // Get third page
     const page3 = await store.getLedger(
       bucket.id,
-      page2.nextCursor!,
+      requireCursor(page2.nextCursor),
       2,
     );
     expect(page3.entries).toHaveLength(1);
@@ -172,12 +167,7 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.tryDeduct(
-      bucket.id,
-      "user-1",
-      11,
-      "inference",
-    );
+    const result = await store.tryDeduct(bucket.id, "user-1", 11, "inference");
 
     expect(result).toEqual({ success: false, remaining: 10, entry: null });
     expect((await store.getLedger(bucket.id)).entries).toHaveLength(0);
@@ -189,12 +179,7 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.tryDeduct(
-      bucket.id,
-      "user-1",
-      10,
-      "inference",
-    );
+    const result = await store.tryDeduct(bucket.id, "user-1", 10, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(0);
@@ -208,12 +193,7 @@ describe("MemoryStore", () => {
     });
     await store.deduct(bucket.id, "user-1", 4, "inference");
 
-    const result = await store.credit(
-      bucket.id,
-      "user-1",
-      20,
-      "admin-grant",
-    );
+    const result = await store.credit(bucket.id, "user-1", 20, "admin-grant");
 
     expect(result.remaining).toBe(26);
     expect((await store.getBucket("user-1"))?.totalConsumed).toBe(4);
@@ -240,6 +220,8 @@ describe("MemoryStore", () => {
     expect(stale).toEqual(winning);
     expect(stale.usageRemaining).toBe(20);
     expect(stale.totalConsumed).toBe(0);
+    expect(stale.windowStart).toBe(winning.windowStart);
+    expect(stale.windowDurationMs).toBe(winning.windowDurationMs);
   });
 
   it("resets all balances while preserving windows and ledger history", async () => {
@@ -271,12 +253,24 @@ describe("MemoryStore", () => {
   });
 
   it("uses exclusive bucket cursors at keyset page boundaries", async () => {
-    await store.createBucket("user-1", { usageLimit: 10, windowDurationMs: 1000 });
-    await store.createBucket("user-2", { usageLimit: 10, windowDurationMs: 1000 });
-    await store.createBucket("user-3", { usageLimit: 10, windowDurationMs: 1000 });
+    await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.createBucket("user-2", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.createBucket("user-3", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
 
     const firstPage = await store.listBuckets(undefined, 2);
-    const secondPage = await store.listBuckets(firstPage.nextCursor!, 2);
+    const secondPage = await store.listBuckets(
+      requireCursor(firstPage.nextCursor),
+      2,
+    );
     const ids = [...firstPage.buckets, ...secondPage.buckets].map(
       (bucket) => bucket.id,
     );
@@ -298,7 +292,9 @@ describe("MemoryStore", () => {
       await store.deduct(bucket.id, "user-1", 1, "inference");
     }
 
-    expect((await store.getLedger(bucket.id, undefined, 0)).entries).toHaveLength(1);
+    expect(
+      (await store.getLedger(bucket.id, undefined, 0)).entries,
+    ).toHaveLength(1);
     const page = await store.getLedger(bucket.id, undefined, 101);
     expect(page.entries).toHaveLength(100);
     expect(page.nextCursor).toBe(page.entries[99].id);
@@ -571,7 +567,10 @@ describe("UsageManager", () => {
 
     const balance = await manager.getBalance();
     expect(balance.limit).toBe(100);
-    expect(new Date(balance.resetsAt).getTime() - new Date(balance.windowStart).getTime()).toBe(50);
+    expect(
+      new Date(balance.resetsAt).getTime() -
+        new Date(balance.windowStart).getTime(),
+    ).toBe(50);
     vi.useRealTimers();
   });
 

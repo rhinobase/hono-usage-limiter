@@ -1,12 +1,12 @@
 import type {
   UsageBalanceInfo,
-  UsageBucketProvisionOptions,
   UsageBucket,
+  UsageBucketProvisionOptions,
   UsageCreditResult,
-  UsageStatus,
-  UsageStore,
   UsageDeductResult,
   UsagePaginatedLedger,
+  UsageStatus,
+  UsageStore,
   UsageTryDeductResult,
 } from "./types";
 
@@ -34,7 +34,8 @@ export class UsageManager<Reason extends string = string> {
     this.ownerId = ownerId;
     this.store = config.store;
     this.defaultUsage = config.defaultUsage ?? 1000;
-    this.defaultWindowDurationMs = config.defaultWindowDurationMs ?? THIRTY_DAYS_MS;
+    this.defaultWindowDurationMs =
+      config.defaultWindowDurationMs ?? THIRTY_DAYS_MS;
     this.autoProvision = config.autoProvision ?? true;
     this.reconcileLimit = config.reconcileLimit ?? false;
   }
@@ -65,19 +66,22 @@ export class UsageManager<Reason extends string = string> {
     }
 
     // Auto-refill: atomically advance an expired window.
-    const windowEnd =
-      this.bucket.windowStart + this.bucket.windowDurationMs;
+    const windowEnd = this.bucket.windowStart + this.bucket.windowDurationMs;
     if (Date.now() >= windowEnd) {
       const now = Date.now();
-      this.bucket = await this.store.rolloverWindow(this.bucket.id, this.bucket.windowStart, {
-        windowStart: now,
-        usageLimit: this.reconcileLimit
-          ? this.defaultUsage
-          : this.bucket.usageLimit,
-        windowDurationMs: this.reconcileLimit
-          ? this.defaultWindowDurationMs
-          : this.bucket.windowDurationMs,
-      });
+      this.bucket = await this.store.rolloverWindow(
+        this.bucket.id,
+        this.bucket.windowStart,
+        {
+          windowStart: now,
+          usageLimit: this.reconcileLimit
+            ? this.defaultUsage
+            : this.bucket.usageLimit,
+          windowDurationMs: this.reconcileLimit
+            ? this.defaultWindowDurationMs
+            : this.bucket.windowDurationMs,
+        },
+      );
     }
 
     return this.bucket;

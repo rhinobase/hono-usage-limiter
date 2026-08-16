@@ -468,6 +468,14 @@ export class D1Store<Reason extends string = string>
     limit?: number,
   ): Promise<UsagePaginatedLedger<Reason>> {
     const pageLimit = normalizePageLimit(limit);
+    const bucket = await this.db
+      .prepare(`SELECT id FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`)
+      .bind(bucketId)
+      .first();
+    if (!bucket) {
+      throw new Error(`Usage bucket "${bucketId}" not found`);
+    }
+
     let query: string;
     const values: unknown[] = [bucketId];
 

@@ -227,10 +227,7 @@ export class MemoryStore<Reason extends string = string>
     const pageLimit = normalizePageLimit(limit);
     const sorted = [...(this.ledger.get(bucketId) ?? [])].reverse();
     const startIndex = cursor
-      ? Math.max(
-          0,
-          sorted.findIndex((entry) => entry.id === cursor) + 1,
-        )
+      ? Math.max(0, sorted.findIndex((entry) => entry.id === cursor) + 1)
       : 0;
     const candidates = sorted.slice(startIndex, startIndex + pageLimit + 1);
     const entries = candidates.slice(0, pageLimit);

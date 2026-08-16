@@ -18,7 +18,7 @@ type AppEnv = {
   };
 };
 
-if (false) {
+function assertTypeContract(): void {
   const db = null as unknown as D1Database;
   const d1Store: UsageStore<"inference" | "admin-grant"> = new D1Store({
     db,
@@ -50,3 +50,5 @@ if (false) {
     }),
   );
 }
+
+void assertTypeContract;
