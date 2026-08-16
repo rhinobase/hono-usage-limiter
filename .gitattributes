@@ -1,0 +1,13 @@
+# Normalize line endings to LF for all text files so the repo stays consistent
+# regardless of a contributor's OS or git `core.autocrlf` setting. This matches
+# Biome's `formatter.lineEnding: "lf"` so `biome check` and CI stay in sync.
+* text=auto eol=lf
+
+# Explicitly treat common binary types as binary (never touch their bytes).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
