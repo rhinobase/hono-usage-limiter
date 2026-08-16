@@ -166,9 +166,9 @@ export class D1Store<Reason extends string = string>
             (id, bucket_id, owner_id, amount, reason, metadata, created_at)
             SELECT ?, ?, ?, ?, ?, ?, ?
             FROM ${this.bucketsTable}
-            WHERE id = ? AND usage_remaining >= ?`,
+            WHERE id = ? AND owner_id = ? AND usage_remaining >= ?`,
         )
-        .bind(...values, minimumRemaining);
+        .bind(...values, entry.ownerId, minimumRemaining);
     }
 
     return this.db
@@ -177,18 +177,21 @@ export class D1Store<Reason extends string = string>
           (id, bucket_id, owner_id, amount, reason, metadata, created_at)
           SELECT ?, ?, ?, ?, ?, ?, ?
           FROM ${this.bucketsTable}
-          WHERE id = ?`,
+          WHERE id = ? AND owner_id = ?`,
       )
-      .bind(...values);
+      .bind(...values, entry.ownerId);
   }
 
   private readRemaining(
     result: D1Result<Record<string, unknown>>,
     bucketId: string,
+    ownerId: string,
   ): number {
     const row = result.results[0];
     if (!row) {
-      throw new Error(`Usage bucket "${bucketId}" not found`);
+      throw new Error(
+        `Usage bucket "${bucketId}" not found for owner "${ownerId}"`,
+      );
     }
     return row.usage_remaining as number;
   }
@@ -314,20 +317,21 @@ export class D1Store<Reason extends string = string>
                 total_consumed = total_consumed + ?,
                 last_consumed_at = ?,
                 updated_at = ?
-            WHERE id = ?`,
+            WHERE id = ? AND owner_id = ?`,
         )
-        .bind(amount, amount, now, now, bucketId),
+        .bind(amount, amount, now, now, bucketId, ownerId),
       this.prepareLedgerInsert(entry),
       this.db
         .prepare(
-          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`,
+          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? AND owner_id = ? LIMIT 1`,
         )
-        .bind(bucketId),
+        .bind(bucketId, ownerId),
     ]);
 
     const remaining = this.readRemaining(
       results[2] as D1Result<Record<string, unknown>>,
       bucketId,
+      ownerId,
     );
 
     return { success: true, remaining, entry };
@@ -360,19 +364,20 @@ export class D1Store<Reason extends string = string>
                 total_consumed = total_consumed + ?,
                 last_consumed_at = ?,
                 updated_at = ?
-            WHERE id = ? AND usage_remaining >= ?`,
+            WHERE id = ? AND owner_id = ? AND usage_remaining >= ?`,
         )
-        .bind(amount, amount, now, now, bucketId, amount),
+        .bind(amount, amount, now, now, bucketId, ownerId, amount),
       this.db
         .prepare(
-          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`,
+          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? AND owner_id = ? LIMIT 1`,
         )
-        .bind(bucketId),
+        .bind(bucketId, ownerId),
     ]);
 
     const remaining = this.readRemaining(
       results[2] as D1Result<Record<string, unknown>>,
       bucketId,
+      ownerId,
     );
     const updateResult = results[1] as D1Result<Record<string, unknown>>;
     if (updateResult.meta.changes === 0) {
@@ -405,20 +410,21 @@ export class D1Store<Reason extends string = string>
         .prepare(
           `UPDATE ${this.bucketsTable}
             SET usage_remaining = usage_remaining + ?, updated_at = ?
-            WHERE id = ?`,
+            WHERE id = ? AND owner_id = ?`,
         )
-        .bind(amount, now, bucketId),
+        .bind(amount, now, bucketId, ownerId),
       this.prepareLedgerInsert(entry),
       this.db
         .prepare(
-          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? LIMIT 1`,
+          `SELECT usage_remaining FROM ${this.bucketsTable} WHERE id = ? AND owner_id = ? LIMIT 1`,
         )
-        .bind(bucketId),
+        .bind(bucketId, ownerId),
     ]);
 
     const remaining = this.readRemaining(
       results[2] as D1Result<Record<string, unknown>>,
       bucketId,
+      ownerId,
     );
     return { remaining, entry };
   }

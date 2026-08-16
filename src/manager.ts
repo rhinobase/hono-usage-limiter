@@ -244,7 +244,7 @@ export class UsageManager<Reason extends string = string> {
   /**
    * Provision or update the bucket with new plan settings.
    * If the bucket doesn't exist, creates one.
-   * If it exists, updates the usage limit (and optionally resets remaining).
+   * If it exists, updates the plan settings (and optionally resets remaining).
    */
   async provision(
     options: UsageBucketProvisionOptions & { resetRemaining?: boolean },
@@ -259,6 +259,7 @@ export class UsageManager<Reason extends string = string> {
 
     const updates: Parameters<UsageStore<Reason>["updateBucket"]>[1] = {
       usageLimit: options.usageLimit,
+      windowDurationMs: options.windowDurationMs,
       updatedAt: Date.now(),
     };
 

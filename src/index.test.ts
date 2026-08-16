@@ -410,6 +410,7 @@ describe("UsageManager", () => {
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(5000);
+    expect(bucket.windowDurationMs).toBe(30 * 24 * 60 * 60 * 1000);
   });
 
   it("should update an existing bucket via provision()", async () => {
@@ -425,12 +426,13 @@ describe("UsageManager", () => {
     // Upgrade plan
     const bucket = await manager.provision({
       usageLimit: 5000,
-      windowDurationMs: 30 * 24 * 60 * 60 * 1000,
+      windowDurationMs: 7 * 24 * 60 * 60 * 1000,
       resetRemaining: true,
     });
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(5000);
+    expect(bucket.windowDurationMs).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("should auto-refill when window expires", async () => {
@@ -484,11 +486,12 @@ describe("UsageManager", () => {
 
     const bucket = await manager.provision({
       usageLimit: 5000,
-      windowDurationMs: 30 * 24 * 60 * 60 * 1000,
+      windowDurationMs: 7 * 24 * 60 * 60 * 1000,
     });
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(800);
+    expect(bucket.windowDurationMs).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("refuses tryDeduct without changing the available balance", async () => {

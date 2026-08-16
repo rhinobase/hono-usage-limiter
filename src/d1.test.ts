@@ -114,16 +114,17 @@ describe("D1Store", () => {
 
     const [insert, update, select] = recorder.batches[0];
     expect(squash(insert.sql)).toMatch(
-      /^INSERT INTO usage_ledger .* SELECT .* FROM usage_buckets WHERE id = \? AND usage_remaining >= \?$/,
+      /^INSERT INTO usage_ledger .* SELECT .* FROM usage_buckets WHERE id = \? AND owner_id = \? AND usage_remaining >= \?$/,
     );
     expect(squash(update.sql)).toMatch(
-      /^UPDATE usage_buckets SET .* WHERE id = \? AND usage_remaining >= \?$/,
+      /^UPDATE usage_buckets SET .* WHERE id = \? AND owner_id = \? AND usage_remaining >= \?$/,
     );
     expect(squash(select.sql)).toBe(
-      "SELECT usage_remaining FROM usage_buckets WHERE id = ? LIMIT 1",
+      "SELECT usage_remaining FROM usage_buckets WHERE id = ? AND owner_id = ? LIMIT 1",
     );
-    expect(insert.bindings.slice(-2)).toEqual(["bucket-1", 3]);
-    expect(update.bindings.slice(-2)).toEqual(["bucket-1", 3]);
+    expect(insert.bindings.slice(-3)).toEqual(["bucket-1", "owner-1", 3]);
+    expect(update.bindings.slice(-3)).toEqual(["bucket-1", "owner-1", 3]);
+    expect(select.bindings).toEqual(["bucket-1", "owner-1"]);
     expect(insert.bindings).toContain("inference");
     expect(insert.bindings).toContain('{"model":"small"}');
     expect(insert.sql).not.toContain("inference");
@@ -143,6 +144,21 @@ describe("D1Store", () => {
       store.tryDeduct("bucket-1", "owner-1", 3, "inference"),
     ).resolves.toEqual({ success: false, remaining: 2, entry: null });
     expect(recorder.batches).toHaveLength(1);
+  });
+
+  it("rejects an accounting operation when the bucket belongs to another owner", async () => {
+    const recorder = new D1Recorder();
+    recorder.batchResponses.push([result([], 0), result([], 0), result([])]);
+    const store = new D1Store({ db: recorder.asDatabase() });
+
+    await expect(
+      store.tryDeduct("bucket-1", "owner-2", 3, "inference"),
+    ).rejects.toThrow('Usage bucket "bucket-1" not found for owner "owner-2"');
+
+    const [insert, update, select] = recorder.batches[0];
+    expect(squash(insert.sql)).toContain("id = ? AND owner_id = ?");
+    expect(squash(update.sql)).toContain("id = ? AND owner_id = ?");
+    expect(squash(select.sql)).toContain("id = ? AND owner_id = ?");
   });
 
   it("rejects invalid hard deductions before preparing database work", async () => {
@@ -175,14 +191,16 @@ describe("D1Store", () => {
     expect(recorder.batches).toHaveLength(1);
     const [update, insert, select] = recorder.batches[0];
     expect(squash(update.sql)).toMatch(
-      /^UPDATE usage_buckets SET usage_remaining = usage_remaining \+ \?, updated_at = \? WHERE id = \?$/,
+      /^UPDATE usage_buckets SET usage_remaining = usage_remaining \+ \?, updated_at = \? WHERE id = \? AND owner_id = \?$/,
     );
     expect(update.sql).not.toContain("usage_limit");
     expect(update.sql).not.toContain("total_consumed");
     expect(insert.bindings).toContain(-20);
     expect(squash(select.sql)).toBe(
-      "SELECT usage_remaining FROM usage_buckets WHERE id = ? LIMIT 1",
+      "SELECT usage_remaining FROM usage_buckets WHERE id = ? AND owner_id = ? LIMIT 1",
     );
+    expect(update.bindings.slice(-2)).toEqual(["bucket-1", "owner-1"]);
+    expect(select.bindings).toEqual(["bucket-1", "owner-1"]);
   });
 
   it("uses compare-and-set rollover and returns the current winning bucket", async () => {
