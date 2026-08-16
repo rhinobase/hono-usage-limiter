@@ -165,6 +165,144 @@ describe("MemoryStore", () => {
     expect(entries[1].reason).toBe("second");
     expect(entries[2].reason).toBe("first");
   });
+
+  it("refuses tryDeduct without mutating balance or ledger", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(
+      bucket.id,
+      "user-1",
+      11,
+      "inference",
+    );
+
+    expect(result).toEqual({ success: false, remaining: 10, entry: null });
+    expect((await store.getLedger(bucket.id)).entries).toHaveLength(0);
+  });
+
+  it("allows tryDeduct at the exact remaining balance", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(
+      bucket.id,
+      "user-1",
+      10,
+      "inference",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(0);
+    expect(result.entry.amount).toBe(10);
+  });
+
+  it("credits above the configured limit without changing consumed usage", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 4, "inference");
+
+    const result = await store.credit(
+      bucket.id,
+      "user-1",
+      20,
+      "admin-grant",
+    );
+
+    expect(result.remaining).toBe(26);
+    expect((await store.getBucket("user-1"))?.totalConsumed).toBe(4);
+    expect(result.entry.amount).toBe(-20);
+  });
+
+  it("returns the winning rollover unchanged to a stale caller", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const winning = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 1000,
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    const stale = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 2000,
+      usageLimit: 30,
+      windowDurationMs: 3000,
+    });
+
+    expect(stale).toEqual(winning);
+    expect(stale.usageRemaining).toBe(20);
+    expect(stale.totalConsumed).toBe(0);
+  });
+
+  it("resets all balances while preserving windows and ledger history", async () => {
+    const first = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    const second = await store.createBucket("user-2", {
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    await store.deduct(first.id, "user-1", 4, "inference");
+    await store.deduct(second.id, "user-2", 8, "inference");
+
+    expect(await store.resetAll()).toBe(2);
+    expect(await store.getBucket("user-1")).toMatchObject({
+      usageRemaining: 10,
+      totalConsumed: 0,
+      windowStart: first.windowStart,
+      windowDurationMs: first.windowDurationMs,
+    });
+    expect(await store.getBucket("user-2")).toMatchObject({
+      usageRemaining: 20,
+      totalConsumed: 0,
+      windowStart: second.windowStart,
+      windowDurationMs: second.windowDurationMs,
+    });
+    expect((await store.getLedger(first.id)).entries).toHaveLength(1);
+  });
+
+  it("uses exclusive bucket cursors at keyset page boundaries", async () => {
+    await store.createBucket("user-1", { usageLimit: 10, windowDurationMs: 1000 });
+    await store.createBucket("user-2", { usageLimit: 10, windowDurationMs: 1000 });
+    await store.createBucket("user-3", { usageLimit: 10, windowDurationMs: 1000 });
+
+    const firstPage = await store.listBuckets(undefined, 2);
+    const secondPage = await store.listBuckets(firstPage.nextCursor!, 2);
+    const ids = [...firstPage.buckets, ...secondPage.buckets].map(
+      (bucket) => bucket.id,
+    );
+
+    expect(firstPage.buckets).toHaveLength(2);
+    expect(firstPage.nextCursor).toBe(firstPage.buckets[1].id);
+    expect(secondPage.buckets).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toEqual([...ids].sort());
+  });
+
+  it("normalizes zero and oversized ledger limits", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 200,
+      windowDurationMs: 1000,
+    });
+    for (let index = 0; index < 101; index++) {
+      await store.deduct(bucket.id, "user-1", 1, "inference");
+    }
+
+    expect((await store.getLedger(bucket.id, undefined, 0)).entries).toHaveLength(1);
+    const page = await store.getLedger(bucket.id, undefined, 101);
+    expect(page.entries).toHaveLength(100);
+    expect(page.nextCursor).toBe(page.entries[99].id);
+  });
 });
 
 describe("UsageManager", () => {
