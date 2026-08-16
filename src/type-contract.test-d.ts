@@ -1,7 +1,9 @@
 import { Hono } from "hono";
+import { D1Store } from "./d1";
 import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
 import { usageManager } from "./middleware";
+import type { UsageStore } from "./types";
 
 type Reason = "inference" | "embedding";
 
@@ -17,6 +19,12 @@ type AppEnv = {
 };
 
 if (false) {
+  const db = null as unknown as D1Database;
+  const d1Store: UsageStore<"inference" | "admin-grant"> = new D1Store({
+    db,
+  });
+  void d1Store;
+
   const store = new MemoryStore<Reason>();
   const manager = new UsageManager<Reason>("user-1", { store });
 
