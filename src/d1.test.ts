@@ -222,28 +222,63 @@ describe("D1Store", () => {
     );
   });
 
-  it("supports window duration in dynamic bucket updates", async () => {
+  it("uses one parameter-only statement shape for every bucket update", async () => {
     const recorder = new D1Recorder();
-    recorder.runResponses.push(result([], 1));
-    recorder.firstResponses.push({
-      ...winningBucketRow,
-      window_duration_ms: 9_000,
-    });
+    recorder.runResponses.push(result([], 1), result([], 1));
+    recorder.firstResponses.push(
+      { ...winningBucketRow, window_duration_ms: 9_000 },
+      { ...winningBucketRow, usage_remaining: 0, last_consumed_at: null },
+    );
     const store = new D1Store({ db: recorder.asDatabase() });
 
     const bucket = await store.updateBucket("bucket-1", {
       windowDurationMs: 9_000,
     });
+    const suspiciousBucketId = 'bucket-2" OR 1 = 1 --';
+    await store.updateBucket(suspiciousBucketId, {
+      usageRemaining: 0,
+      lastConsumedAt: null,
+      updatedAt: 1_234,
+    });
 
     expect(bucket.windowDurationMs).toBe(9_000);
-    expect(squash(recorder.statements[0].sql)).toContain(
-      "SET window_duration_ms = ?, updated_at = ? WHERE id = ?",
-    );
+    const expectedSql =
+      "UPDATE usage_buckets SET usage_remaining = CASE WHEN ? = 1 THEN ? ELSE usage_remaining END, usage_limit = CASE WHEN ? = 1 THEN ? ELSE usage_limit END, window_start = CASE WHEN ? = 1 THEN ? ELSE window_start END, window_duration_ms = CASE WHEN ? = 1 THEN ? ELSE window_duration_ms END, total_consumed = CASE WHEN ? = 1 THEN ? ELSE total_consumed END, last_consumed_at = CASE WHEN ? = 1 THEN ? ELSE last_consumed_at END, updated_at = ? WHERE id = ?";
+    expect(squash(recorder.statements[0].sql)).toBe(expectedSql);
+    expect(squash(recorder.statements[2].sql)).toBe(expectedSql);
     expect(recorder.statements[0].bindings).toEqual([
+      0,
+      null,
+      0,
+      null,
+      0,
+      null,
+      1,
       9_000,
+      0,
+      null,
+      0,
+      null,
       expect.any(Number),
       "bucket-1",
     ]);
+    expect(recorder.statements[2].bindings).toEqual([
+      1,
+      0,
+      0,
+      null,
+      0,
+      null,
+      0,
+      null,
+      0,
+      null,
+      1,
+      null,
+      1_234,
+      suspiciousBucketId,
+    ]);
+    expect(recorder.statements[2].sql).not.toContain(suspiciousBucketId);
   });
 
   it("uses set-based reset and normalized keyset bucket pagination", async () => {

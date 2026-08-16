@@ -239,43 +239,36 @@ export class D1Store<Reason extends string = string>
     bucketId: string,
     updates: UsageBucketUpdates,
   ): Promise<UsageBucket> {
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
-
-    if (updates.usageRemaining !== undefined) {
-      setClauses.push("usage_remaining = ?");
-      values.push(updates.usageRemaining);
-    }
-    if (updates.usageLimit !== undefined) {
-      setClauses.push("usage_limit = ?");
-      values.push(updates.usageLimit);
-    }
-    if (updates.windowStart !== undefined) {
-      setClauses.push("window_start = ?");
-      values.push(updates.windowStart);
-    }
-    if (updates.windowDurationMs !== undefined) {
-      setClauses.push("window_duration_ms = ?");
-      values.push(updates.windowDurationMs);
-    }
-    if (updates.totalConsumed !== undefined) {
-      setClauses.push("total_consumed = ?");
-      values.push(updates.totalConsumed);
-    }
-    if (updates.lastConsumedAt !== undefined) {
-      setClauses.push("last_consumed_at = ?");
-      values.push(updates.lastConsumedAt);
-    }
-
     const updatedAt = updates.updatedAt ?? Date.now();
-    setClauses.push("updated_at = ?");
-    values.push(updatedAt, bucketId);
 
     await this.db
       .prepare(
-        `UPDATE ${this.bucketsTable} SET ${setClauses.join(", ")} WHERE id = ?`,
+        `UPDATE ${this.bucketsTable}
+          SET usage_remaining = CASE WHEN ? = 1 THEN ? ELSE usage_remaining END,
+              usage_limit = CASE WHEN ? = 1 THEN ? ELSE usage_limit END,
+              window_start = CASE WHEN ? = 1 THEN ? ELSE window_start END,
+              window_duration_ms = CASE WHEN ? = 1 THEN ? ELSE window_duration_ms END,
+              total_consumed = CASE WHEN ? = 1 THEN ? ELSE total_consumed END,
+              last_consumed_at = CASE WHEN ? = 1 THEN ? ELSE last_consumed_at END,
+              updated_at = ?
+          WHERE id = ?`,
       )
-      .bind(...values)
+      .bind(
+        Number(updates.usageRemaining !== undefined),
+        updates.usageRemaining ?? null,
+        Number(updates.usageLimit !== undefined),
+        updates.usageLimit ?? null,
+        Number(updates.windowStart !== undefined),
+        updates.windowStart ?? null,
+        Number(updates.windowDurationMs !== undefined),
+        updates.windowDurationMs ?? null,
+        Number(updates.totalConsumed !== undefined),
+        updates.totalConsumed ?? null,
+        Number(updates.lastConsumedAt !== undefined),
+        updates.lastConsumedAt ?? null,
+        updatedAt,
+        bucketId,
+      )
       .run();
 
     const row = await this.db
