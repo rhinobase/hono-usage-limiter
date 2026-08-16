@@ -38,7 +38,11 @@ function assertPositiveFiniteAmount(amount: number, operation: string): void {
  *
  * `tryDeduct()` and `rolloverWindow()` are best-effort read-modify-write
  * operations. Generic Unstorage drivers do not provide cross-isolate
- * compare-and-set semantics; use a transactional store when that is required.
+ * compare-and-set semantics, so use a transactional store when strict
+ * concurrency is required. `credit()` writes a negative ledger entry and can
+ * raise a current-window balance above its configured limit. `resetAll()` and
+ * `listBuckets()` enumerate stored buckets and are administrative O(n)
+ * operations.
  *
  * @example
  * ```ts

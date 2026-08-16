@@ -97,6 +97,12 @@ export type D1StoreOptions = {
  * CREATE INDEX idx_usage_ledger_owner ON usage_ledger(owner_id);
  * ```
  *
+ * `tryDeduct()` and `rolloverWindow()` use conditional statements in a D1
+ * batch, so concurrent callers receive the current committed bucket state.
+ * `credit()` grants uncapped current-window usage and writes a negative ledger
+ * entry. `resetAll()` refills every bucket without deleting ledger history, and
+ * `listBuckets()` returns bucket-ID-ordered pages.
+ *
  * @example
  * ```ts
  * import { D1Store } from "hono-usage-limiter/d1";
