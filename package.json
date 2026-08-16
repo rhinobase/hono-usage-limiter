@@ -15,7 +15,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "prepare": "is-ci || husky",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "hono",
@@ -55,6 +56,16 @@
       "require": {
         "types": "./dist/memory.d.cts",
         "default": "./dist/memory.cjs"
+      }
+    },
+    "./cache": {
+      "import": {
+        "types": "./dist/cache.d.ts",
+        "default": "./dist/cache.js"
+      },
+      "require": {
+        "types": "./dist/cache.d.cts",
+        "default": "./dist/cache.cjs"
       }
     },
     "./unstorage": {

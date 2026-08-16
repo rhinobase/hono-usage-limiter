@@ -37,24 +37,31 @@ app.get("/usage", async (c) => {
   return c.json(balance);
 });
 
-// Consume usage
+// Atomically reserve usage before starting expensive work.
 app.post("/inference", async (c) => {
   const usage = c.get("usage");
 
-  const status = await usage.check();
-  if (!status.hasUsage) {
+  const deduction = await usage.tryDeduct(
+    30,
+    "inference",
+    { inputTokens: 500, outputTokens: 150 },
+  );
+  if (!deduction.success) {
     return c.json({ error: "Usage limit exceeded" }, 429);
   }
 
-  // Do expensive work...
+  // It is now safe to do expensive work.
   const result = await runInference(input);
-
-  // Deduct actual cost
-  await usage.deduct(30, "inference", { inputTokens: 500, outputTokens: 150 });
 
   return c.json(result);
 });
 ```
+
+Use `tryDeduct()` to gate work that must not exceed the available balance. It
+checks the balance and records the deduction as one store operation. Do not use
+`check()` followed by `deduct()` for this gate: another request can consume the
+balance between those calls. `deduct()` remains a soft operation for workflows
+that intentionally permit a negative balance.
 
 ## Storage Adapters
 
@@ -149,9 +156,20 @@ class MyStore implements UsageStore {
   createBucket(ownerId, options) { /* ... */ }
   updateBucket(bucketId, updates) { /* ... */ }
   deduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
+  tryDeduct(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
+  credit(bucketId, ownerId, amount, reason, metadata?) { /* ... */ }
+  rolloverWindow(bucketId, expectedWindowStart, options) { /* ... */ }
   getLedger(bucketId, cursor?, limit?) { /* ... */ }
+  resetAll() { /* ... */ }
+  listBuckets(cursor?, limit?) { /* ... */ }
 }
 ```
+
+All of these methods are mandatory. `tryDeduct()` must make its balance check
+and successful deduction atomic; a refused deduction returns
+`{ success: false, remaining, entry: null }` without changing the bucket or
+ledger. `rolloverWindow()` must only advance a window when its start still
+matches `expectedWindowStart`.
 
 ## API
 
@@ -168,6 +186,7 @@ Hono middleware that injects a `UsageManager` onto the context as `c.get("usage"
 | `defaultUsage` | `number` | `1000` | Default usage limit for new buckets |
 | `defaultWindowDurationMs` | `number` | `2592000000` (30 days) | Default rolling window duration |
 | `autoProvision` | `boolean` | `true` | Auto-create bucket if none exists |
+| `reconcileLimit` | `boolean` | `false` | Apply configured defaults when an expired window rolls over |
 
 ### `UsageManager`
 
@@ -176,11 +195,72 @@ Available via `c.get("usage")` in your handlers:
 | Method | Description |
 |---|---|
 | `check()` | Returns `UsageStatus` with `remaining`, `limit`, `hasUsage`, `resetsAt` |
-| `deduct(amount, reason, metadata?)` | Deducts usage and records a ledger entry |
+| `deduct(amount, reason, metadata?)` | Soft deduction: records usage even when it makes the balance negative |
+| `tryDeduct(amount, reason, metadata?)` | Hard deduction: atomically refuses when the balance is insufficient |
+| `credit(amount, reason, metadata?)` | Grants usage and records a negative ledger entry |
 | `getBalance()` | Returns full `UsageBalanceInfo` including `totalConsumed` and window timestamps |
 | `getHistory(cursor?, limit?)` | Returns paginated ledger entries (newest first) |
 | `reset()` | Refills usage to the limit and starts a new window |
 | `provision(options)` | Creates or updates a bucket with new plan settings |
+
+### Grant usage with `credit()`
+
+Use `credit()` for administrator grants in the active window:
+
+```typescript
+await c.get("usage").credit(250, "administrator-grant", {
+  ticket: "SUP-123",
+});
+```
+
+Credits are not capped at `usageLimit`: a grant can take the current window's
+remaining usage above its plan limit. Each grant writes a negative ledger
+record and does not alter `totalConsumed`, which continues to represent only
+positive usage consumed in the active window. Credits expire with that window.
+
+### Reconcile plan settings at rollover
+
+By default, an existing bucket keeps its stored limit and duration when its
+window rolls over. Set `reconcileLimit: true` to apply `defaultUsage` and
+`defaultWindowDurationMs` at the next rollover instead. This never rewrites an
+active window.
+
+### `CachedUsageStore`
+
+`CachedUsageStore` is available from `hono-usage-limiter/cache` when you have a
+short-lived asynchronous cache for bucket reads:
+
+```typescript
+import { CachedUsageStore } from "hono-usage-limiter/cache";
+import { D1Store } from "hono-usage-limiter/d1";
+
+const store = new CachedUsageStore({
+  inner: new D1Store({ db: env.DB }),
+  cache,
+});
+```
+
+The wrapped store remains authoritative. Every mutation, including
+`tryDeduct()`, runs against the inner store before the cache is refreshed, so a
+cached balance is never used to approve a hard deduction. Ledger history and
+bucket administration also use the inner store.
+
+### Administration
+
+`resetAll()` and `listBuckets()` are store-level operations for administrative
+jobs. `resetAll()` refills every bucket to its own configured limit, resets
+`totalConsumed`, preserves its window dates, and returns the number of buckets
+changed; ledger history remains intact.
+
+```typescript
+const changed = await store.resetAll();
+const page = await store.listBuckets(cursor, 50);
+```
+
+`listBuckets()` orders buckets by ID and uses keyset pagination. The same
+pagination bounds apply to `listBuckets()` and `getHistory()`: the default is
+20 entries, finite limits are truncated and clamped to the inclusive range 1
+through 100, and non-finite limits throw an error.
 
 ## Contributing
 

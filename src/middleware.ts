@@ -1,10 +1,10 @@
-import type { MiddlewareHandler } from "hono";
+import type { Context, Env, MiddlewareHandler } from "hono";
 import { UsageManager } from "./manager";
 import type { UsageManagerConfig, UsageStore } from "./types";
 
-export type UsageEnv = {
+export type UsageEnv<Reason extends string = string> = {
   Variables: {
-    usage: UsageManager;
+    usage: UsageManager<Reason>;
   };
 };
 
@@ -40,18 +40,19 @@ export type UsageEnv = {
  * }));
  * ```
  */
-export function usageManager(
-  config: UsageManagerConfig,
-): MiddlewareHandler<UsageEnv> {
+export function usageManager<E extends Env, Reason extends string = string>(
+  config: UsageManagerConfig<E, Reason>,
+): MiddlewareHandler<E & UsageEnv<Reason>> {
   const { keyGenerator, store: storeOrFactory, ...managerConfig } = config;
 
   return async (c, next) => {
-    const store: UsageStore =
+    const requestContext = c as unknown as Context<E>;
+    const store: UsageStore<Reason> =
       typeof storeOrFactory === "function"
-        ? storeOrFactory(c)
+        ? storeOrFactory(requestContext)
         : storeOrFactory;
 
-    const ownerId = await keyGenerator(c);
+    const ownerId = await keyGenerator(requestContext);
     const manager = new UsageManager(ownerId, { ...managerConfig, store });
 
     c.set("usage", manager);

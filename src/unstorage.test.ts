@@ -1,13 +1,20 @@
 import { createStorage } from "unstorage";
-import { describe, expect, it, beforeEach } from "vitest";
-import { UnstorageStore } from "./unstorage";
+import { beforeEach, describe, expect, it } from "vitest";
 import { UsageManager } from "./manager";
+import { UnstorageStore } from "./unstorage";
+
+function requireCursor(cursor: string | null): string {
+  expect(cursor).not.toBeNull();
+  if (cursor === null) throw new Error("Expected a pagination cursor");
+  return cursor;
+}
 
 describe("UnstorageStore", () => {
   let store: UnstorageStore;
+  let storage: ReturnType<typeof createStorage>;
 
   beforeEach(() => {
-    const storage = createStorage();
+    storage = createStorage();
     store = new UnstorageStore({ storage });
   });
 
@@ -71,6 +78,23 @@ describe("UnstorageStore", () => {
     expect(updated.usageLimit).toBe(1000);
   });
 
+  it("backfills a missing reverse bucket index when updating legacy data", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 1000,
+      windowDurationMs: 1000,
+    });
+    await storage.removeItem(`usage:bucket-owner:${bucket.id}`);
+
+    const updated = await store.updateBucket(bucket.id, {
+      usageRemaining: 800,
+    });
+
+    expect(updated.usageRemaining).toBe(800);
+    expect(await storage.getItem(`usage:bucket-owner:${bucket.id}`)).toBe(
+      "user-1",
+    );
+  });
+
   it("should throw when updating a non-existent bucket", async () => {
     await expect(
       store.updateBucket("unknown", { usageRemaining: 0 }),
@@ -83,13 +107,9 @@ describe("UnstorageStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      30,
-      "inference",
-      { inputTokens: 30 },
-    );
+    const result = await store.deduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
@@ -104,15 +124,130 @@ describe("UnstorageStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      25,
-      "inference",
-    );
+    const result = await store.deduct(bucket.id, "user-1", 25, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(-15);
+  });
+
+  it("refuses tryDeduct without changing balance or ledger", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 11, "inference");
+
+    expect(result).toEqual({ success: false, remaining: 10, entry: null });
+    expect((await store.getLedger(bucket.id)).entries).toHaveLength(0);
+  });
+
+  it("allows tryDeduct at the exact remaining balance", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 10, "inference");
+
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(0);
+    expect(result.entry.amount).toBe(10);
+  });
+
+  it("credits above the configured limit without changing consumed usage", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 4, "inference");
+
+    const result = await store.credit(bucket.id, "user-1", 20, "admin-grant");
+
+    expect(result.remaining).toBe(26);
+    expect((await store.getBucket("user-1"))?.totalConsumed).toBe(4);
+    expect(result.entry.amount).toBe(-20);
+  });
+
+  it("returns the winning rollover unchanged to a stale caller", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const winning = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 1000,
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    const stale = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 2000,
+      usageLimit: 30,
+      windowDurationMs: 3000,
+    });
+
+    expect(stale).toEqual(winning);
+    expect(stale.usageRemaining).toBe(20);
+    expect(stale.totalConsumed).toBe(0);
+  });
+
+  it("resets all balances while preserving windows and ledger history", async () => {
+    const first = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    const second = await store.createBucket("user-2", {
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    await store.deduct(first.id, "user-1", 4, "inference");
+    await store.deduct(second.id, "user-2", 8, "inference");
+
+    expect(await store.resetAll()).toBe(2);
+    expect(await store.getBucket("user-1")).toMatchObject({
+      usageRemaining: 10,
+      totalConsumed: 0,
+      windowStart: first.windowStart,
+      windowDurationMs: first.windowDurationMs,
+    });
+    expect(await store.getBucket("user-2")).toMatchObject({
+      usageRemaining: 20,
+      totalConsumed: 0,
+      windowStart: second.windowStart,
+      windowDurationMs: second.windowDurationMs,
+    });
+    expect((await store.getLedger(first.id)).entries).toHaveLength(1);
+  });
+
+  it("uses exclusive bucket cursors and ignores reverse index keys", async () => {
+    const first = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    const second = await store.createBucket("user-2", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    const third = await store.createBucket("user-3", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await storage.setItem("usage:bucket-owner:non-bucket", "user-4");
+
+    const firstPage = await store.listBuckets(undefined, 2);
+    const secondPage = await store.listBuckets(
+      requireCursor(firstPage.nextCursor),
+      2,
+    );
+    const ids = [...firstPage.buckets, ...secondPage.buckets].map(
+      (bucket) => bucket.id,
+    );
+
+    expect(firstPage.buckets).toHaveLength(2);
+    expect(secondPage.buckets).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+    expect(new Set(ids)).toEqual(new Set([first.id, second.id, third.id]));
+    expect(ids).toEqual([...ids].sort());
   });
 
   it("should return paginated ledger entries", async () => {
@@ -127,23 +262,52 @@ describe("UnstorageStore", () => {
 
     const page1 = await store.getLedger(bucket.id, undefined, 2);
     expect(page1.entries).toHaveLength(2);
-    expect(page1.nextCursor).not.toBeNull();
-
     const page2 = await store.getLedger(
       bucket.id,
-      page1.nextCursor!,
+      requireCursor(page1.nextCursor),
       2,
     );
     expect(page2.entries).toHaveLength(2);
-    expect(page2.nextCursor).not.toBeNull();
 
     const page3 = await store.getLedger(
       bucket.id,
-      page2.nextCursor!,
+      requireCursor(page2.nextCursor),
       2,
     );
     expect(page3.entries).toHaveLength(1);
     expect(page3.nextCursor).toBeNull();
+  });
+
+  it("continues past missing indexed entries to paginate later valid ledger history", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 1000,
+    });
+    const first = await store.deduct(bucket.id, "user-1", 1, "first");
+    const second = await store.deduct(bucket.id, "user-1", 1, "second");
+    const missing = await store.deduct(bucket.id, "user-1", 1, "missing");
+    const fourth = await store.deduct(bucket.id, "user-1", 1, "fourth");
+    await storage.removeItem(`usage:ledger:${bucket.id}:${missing.entry.id}`);
+
+    const page = await store.getLedger(bucket.id, undefined, 2);
+
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      fourth.entry.id,
+      second.entry.id,
+    ]);
+    expect(page.nextCursor).toBe(second.entry.id);
+    await expect(
+      store.getLedger(bucket.id, second.entry.id, 2),
+    ).resolves.toEqual({
+      entries: [first.entry],
+      nextCursor: null,
+    });
+  });
+
+  it("throws the documented not-found error for a missing bucket ledger", async () => {
+    await expect(store.getLedger("missing-bucket")).rejects.toThrow(
+      'Usage bucket "missing-bucket" not found',
+    );
   });
 
   it("should return ledger entries newest first", async () => {

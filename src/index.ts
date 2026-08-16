@@ -1,16 +1,26 @@
-export { usageManager } from "./middleware";
-export { UsageManager } from "./manager";
 export type { UsageManagerOptions } from "./manager";
+export { UsageManager } from "./manager";
 export type { UsageEnv } from "./middleware";
+export { usageManager } from "./middleware";
+export {
+  DEFAULT_PAGE_LIMIT,
+  MAX_PAGE_LIMIT,
+  normalizePageLimit,
+} from "./pagination";
 export type {
   UsageBalanceInfo,
-  UsageBucketProvisionOptions,
   UsageBucket,
+  UsageBucketProvisionOptions,
+  UsageBucketUpdates,
+  UsageCreditResult,
+  UsageDeductResult,
+  UsageLedgerEntry,
   UsageManagerConfig,
+  UsagePaginatedBuckets,
+  UsagePaginatedLedger,
+  UsageRolloverOptions,
   UsageStatus,
   UsageStore,
   UsageStoreFactory,
-  UsageDeductResult,
-  UsageLedgerEntry,
-  UsagePaginatedLedger,
+  UsageTryDeductResult,
 } from "./types";

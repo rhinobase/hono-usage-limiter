@@ -1,8 +1,14 @@
 import { Hono } from "hono";
-import { describe, expect, it, beforeEach } from "vitest";
-import { usageManager, type UsageEnv } from "./middleware";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
+import { type UsageEnv, usageManager } from "./middleware";
+
+function requireCursor(cursor: string | null): string {
+  expect(cursor).not.toBeNull();
+  if (cursor === null) throw new Error("Expected a pagination cursor");
+  return cursor;
+}
 
 describe("MemoryStore", () => {
   let store: MemoryStore;
@@ -83,13 +89,9 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      30,
-      "inference",
-      { inputTokens: 30 },
-    );
+    const result = await store.deduct(bucket.id, "user-1", 30, "inference", {
+      inputTokens: 30,
+    });
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(970);
@@ -104,12 +106,7 @@ describe("MemoryStore", () => {
       windowDurationMs: 1000,
     });
 
-    const result = await store.deduct(
-      bucket.id,
-      "user-1",
-      25,
-      "inference",
-    );
+    const result = await store.deduct(bucket.id, "user-1", 25, "inference");
 
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(-15);
@@ -129,21 +126,19 @@ describe("MemoryStore", () => {
     // Get first page (limit 2)
     const page1 = await store.getLedger(bucket.id, undefined, 2);
     expect(page1.entries).toHaveLength(2);
-    expect(page1.nextCursor).not.toBeNull();
 
     // Get second page
     const page2 = await store.getLedger(
       bucket.id,
-      page1.nextCursor!,
+      requireCursor(page1.nextCursor),
       2,
     );
     expect(page2.entries).toHaveLength(2);
-    expect(page2.nextCursor).not.toBeNull();
 
     // Get third page
     const page3 = await store.getLedger(
       bucket.id,
-      page2.nextCursor!,
+      requireCursor(page2.nextCursor),
       2,
     );
     expect(page3.entries).toHaveLength(1);
@@ -164,6 +159,145 @@ describe("MemoryStore", () => {
     expect(entries[0].reason).toBe("third");
     expect(entries[1].reason).toBe("second");
     expect(entries[2].reason).toBe("first");
+  });
+
+  it("refuses tryDeduct without mutating balance or ledger", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 11, "inference");
+
+    expect(result).toEqual({ success: false, remaining: 10, entry: null });
+    expect((await store.getLedger(bucket.id)).entries).toHaveLength(0);
+  });
+
+  it("allows tryDeduct at the exact remaining balance", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const result = await store.tryDeduct(bucket.id, "user-1", 10, "inference");
+
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(0);
+    expect(result.entry.amount).toBe(10);
+  });
+
+  it("credits above the configured limit without changing consumed usage", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.deduct(bucket.id, "user-1", 4, "inference");
+
+    const result = await store.credit(bucket.id, "user-1", 20, "admin-grant");
+
+    expect(result.remaining).toBe(26);
+    expect((await store.getBucket("user-1"))?.totalConsumed).toBe(4);
+    expect(result.entry.amount).toBe(-20);
+  });
+
+  it("returns the winning rollover unchanged to a stale caller", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const winning = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 1000,
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    const stale = await store.rolloverWindow(bucket.id, bucket.windowStart, {
+      windowStart: bucket.windowStart + 2000,
+      usageLimit: 30,
+      windowDurationMs: 3000,
+    });
+
+    expect(stale).toEqual(winning);
+    expect(stale.usageRemaining).toBe(20);
+    expect(stale.totalConsumed).toBe(0);
+    expect(stale.windowStart).toBe(winning.windowStart);
+    expect(stale.windowDurationMs).toBe(winning.windowDurationMs);
+  });
+
+  it("resets all balances while preserving windows and ledger history", async () => {
+    const first = await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    const second = await store.createBucket("user-2", {
+      usageLimit: 20,
+      windowDurationMs: 2000,
+    });
+    await store.deduct(first.id, "user-1", 4, "inference");
+    await store.deduct(second.id, "user-2", 8, "inference");
+
+    expect(await store.resetAll()).toBe(2);
+    expect(await store.getBucket("user-1")).toMatchObject({
+      usageRemaining: 10,
+      totalConsumed: 0,
+      windowStart: first.windowStart,
+      windowDurationMs: first.windowDurationMs,
+    });
+    expect(await store.getBucket("user-2")).toMatchObject({
+      usageRemaining: 20,
+      totalConsumed: 0,
+      windowStart: second.windowStart,
+      windowDurationMs: second.windowDurationMs,
+    });
+    expect((await store.getLedger(first.id)).entries).toHaveLength(1);
+  });
+
+  it("uses exclusive bucket cursors at keyset page boundaries", async () => {
+    await store.createBucket("user-1", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.createBucket("user-2", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+    await store.createBucket("user-3", {
+      usageLimit: 10,
+      windowDurationMs: 1000,
+    });
+
+    const firstPage = await store.listBuckets(undefined, 2);
+    const secondPage = await store.listBuckets(
+      requireCursor(firstPage.nextCursor),
+      2,
+    );
+    const ids = [...firstPage.buckets, ...secondPage.buckets].map(
+      (bucket) => bucket.id,
+    );
+
+    expect(firstPage.buckets).toHaveLength(2);
+    expect(firstPage.nextCursor).toBe(firstPage.buckets[1].id);
+    expect(secondPage.buckets).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toEqual([...ids].sort());
+  });
+
+  it("normalizes zero and oversized ledger limits", async () => {
+    const bucket = await store.createBucket("user-1", {
+      usageLimit: 200,
+      windowDurationMs: 1000,
+    });
+    for (let index = 0; index < 101; index++) {
+      await store.deduct(bucket.id, "user-1", 1, "inference");
+    }
+
+    expect(
+      (await store.getLedger(bucket.id, undefined, 0)).entries,
+    ).toHaveLength(1);
+    const page = await store.getLedger(bucket.id, undefined, 101);
+    expect(page.entries).toHaveLength(100);
+    expect(page.nextCursor).toBe(page.entries[99].id);
   });
 });
 
@@ -276,6 +410,7 @@ describe("UsageManager", () => {
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(5000);
+    expect(bucket.windowDurationMs).toBe(30 * 24 * 60 * 60 * 1000);
   });
 
   it("should update an existing bucket via provision()", async () => {
@@ -291,15 +426,17 @@ describe("UsageManager", () => {
     // Upgrade plan
     const bucket = await manager.provision({
       usageLimit: 5000,
-      windowDurationMs: 30 * 24 * 60 * 60 * 1000,
+      windowDurationMs: 7 * 24 * 60 * 60 * 1000,
       resetRemaining: true,
     });
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(5000);
+    expect(bucket.windowDurationMs).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("should auto-refill when window expires", async () => {
+    vi.useFakeTimers();
     const manager = new UsageManager("user-1", {
       store,
       defaultUsage: 100,
@@ -310,12 +447,12 @@ describe("UsageManager", () => {
     const statusBefore = await manager.check();
     expect(statusBefore.remaining).toBe(40);
 
-    // Wait for the window to expire
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    vi.advanceTimersByTime(50);
 
     const statusAfter = await manager.check();
     expect(statusAfter.remaining).toBe(100);
     expect(statusAfter.hasUsage).toBe(true);
+    vi.useRealTimers();
   });
 
   it("should throw on invalid deduct amount", async () => {
@@ -349,11 +486,118 @@ describe("UsageManager", () => {
 
     const bucket = await manager.provision({
       usageLimit: 5000,
-      windowDurationMs: 30 * 24 * 60 * 60 * 1000,
+      windowDurationMs: 7 * 24 * 60 * 60 * 1000,
     });
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(800);
+    expect(bucket.windowDurationMs).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("refuses tryDeduct without changing the available balance", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 10,
+    });
+
+    const result = await manager.tryDeduct(11, "inference");
+
+    expect(result).toEqual({ success: false, remaining: 10, entry: null });
+    expect((await manager.check()).remaining).toBe(10);
+    expect((await manager.getHistory()).entries).toHaveLength(0);
+  });
+
+  it("rejects invalid credit amounts", async () => {
+    const manager = new UsageManager("user-1", { store });
+
+    await expect(manager.credit(0, "admin-grant")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+    await expect(manager.credit(Number.NaN, "admin-grant")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+  });
+
+  it("expires current-window credit when the window rolls over", async () => {
+    vi.useFakeTimers();
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 10,
+      defaultWindowDurationMs: 50,
+    });
+
+    await manager.credit(20, "admin-grant");
+    expect((await manager.check()).remaining).toBe(30);
+    vi.advanceTimersByTime(50);
+
+    expect((await manager.check()).remaining).toBe(10);
+    vi.useRealTimers();
+  });
+
+  it("reconciles the configured plan only during rollover", async () => {
+    vi.useFakeTimers();
+    await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 50,
+    });
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 100,
+      reconcileLimit: true,
+    });
+
+    expect((await manager.check()).limit).toBe(100);
+    vi.advanceTimersByTime(50);
+
+    expect((await manager.check()).limit).toBe(200);
+    vi.useRealTimers();
+  });
+
+  it("keeps stored plan settings during rollover by default", async () => {
+    vi.useFakeTimers();
+    await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 50,
+    });
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 100,
+    });
+
+    vi.advanceTimersByTime(50);
+
+    const balance = await manager.getBalance();
+    expect(balance.limit).toBe(100);
+    expect(
+      new Date(balance.resetsAt).getTime() -
+        new Date(balance.windowStart).getTime(),
+    ).toBe(50);
+    vi.useRealTimers();
+  });
+
+  it("uses the winning rollover bucket when another manager advances the window", async () => {
+    vi.useFakeTimers();
+    const first = new UsageManager("user-1", {
+      store,
+      defaultUsage: 300,
+      defaultWindowDurationMs: 50,
+      reconcileLimit: true,
+    });
+    const second = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 50,
+      reconcileLimit: true,
+    });
+
+    await first.check();
+    vi.advanceTimersByTime(50);
+    expect((await second.check()).limit).toBe(200);
+
+    expect((await first.check()).limit).toBe(200);
+    vi.useRealTimers();
   });
 });
 
