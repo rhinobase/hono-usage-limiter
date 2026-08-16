@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { usageManager, type UsageEnv } from "./middleware";
 import { UsageManager } from "./manager";
 import { MemoryStore } from "./memory";
@@ -438,6 +438,7 @@ describe("UsageManager", () => {
   });
 
   it("should auto-refill when window expires", async () => {
+    vi.useFakeTimers();
     const manager = new UsageManager("user-1", {
       store,
       defaultUsage: 100,
@@ -448,12 +449,12 @@ describe("UsageManager", () => {
     const statusBefore = await manager.check();
     expect(statusBefore.remaining).toBe(40);
 
-    // Wait for the window to expire
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    vi.advanceTimersByTime(50);
 
     const statusAfter = await manager.check();
     expect(statusAfter.remaining).toBe(100);
     expect(statusAfter.hasUsage).toBe(true);
+    vi.useRealTimers();
   });
 
   it("should throw on invalid deduct amount", async () => {
@@ -492,6 +493,109 @@ describe("UsageManager", () => {
 
     expect(bucket.usageLimit).toBe(5000);
     expect(bucket.usageRemaining).toBe(800);
+  });
+
+  it("refuses tryDeduct without changing the available balance", async () => {
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 10,
+    });
+
+    const result = await manager.tryDeduct(11, "inference");
+
+    expect(result).toEqual({ success: false, remaining: 10, entry: null });
+    expect((await manager.check()).remaining).toBe(10);
+    expect((await manager.getHistory()).entries).toHaveLength(0);
+  });
+
+  it("rejects invalid credit amounts", async () => {
+    const manager = new UsageManager("user-1", { store });
+
+    await expect(manager.credit(0, "admin-grant")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+    await expect(manager.credit(Number.NaN, "admin-grant")).rejects.toThrow(
+      "Credit amount must be a positive finite number",
+    );
+  });
+
+  it("expires current-window credit when the window rolls over", async () => {
+    vi.useFakeTimers();
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 10,
+      defaultWindowDurationMs: 50,
+    });
+
+    await manager.credit(20, "admin-grant");
+    expect((await manager.check()).remaining).toBe(30);
+    vi.advanceTimersByTime(50);
+
+    expect((await manager.check()).remaining).toBe(10);
+    vi.useRealTimers();
+  });
+
+  it("reconciles the configured plan only during rollover", async () => {
+    vi.useFakeTimers();
+    await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 50,
+    });
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 100,
+      reconcileLimit: true,
+    });
+
+    expect((await manager.check()).limit).toBe(100);
+    vi.advanceTimersByTime(50);
+
+    expect((await manager.check()).limit).toBe(200);
+    vi.useRealTimers();
+  });
+
+  it("keeps stored plan settings during rollover by default", async () => {
+    vi.useFakeTimers();
+    await store.createBucket("user-1", {
+      usageLimit: 100,
+      windowDurationMs: 50,
+    });
+    const manager = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 100,
+    });
+
+    vi.advanceTimersByTime(50);
+
+    const balance = await manager.getBalance();
+    expect(balance.limit).toBe(100);
+    expect(new Date(balance.resetsAt).getTime() - new Date(balance.windowStart).getTime()).toBe(50);
+    vi.useRealTimers();
+  });
+
+  it("uses the winning rollover bucket when another manager advances the window", async () => {
+    vi.useFakeTimers();
+    const first = new UsageManager("user-1", {
+      store,
+      defaultUsage: 300,
+      defaultWindowDurationMs: 50,
+      reconcileLimit: true,
+    });
+    const second = new UsageManager("user-1", {
+      store,
+      defaultUsage: 200,
+      defaultWindowDurationMs: 50,
+      reconcileLimit: true,
+    });
+
+    await first.check();
+    vi.advanceTimersByTime(50);
+    expect((await second.check()).limit).toBe(200);
+
+    expect((await first.check()).limit).toBe(200);
+    vi.useRealTimers();
   });
 });
 

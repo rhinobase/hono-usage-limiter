@@ -1,3 +1,5 @@
+import type { Context, Env } from "hono";
+
 export type UsageBucket = {
   /** Unique identifier for the bucket */
   id: string;
@@ -241,9 +243,15 @@ export interface UsageStore<Reason extends string = string> {
  * }));
  * ```
  */
-export type UsageStoreFactory = (c: unknown) => UsageStore;
+export type UsageStoreFactory<
+  E extends Env = Env,
+  Reason extends string = string,
+> = (c: Context<E>) => UsageStore<Reason>;
 
-export type UsageManagerConfig = {
+export type UsageManagerConfig<
+  E extends Env = Env,
+  Reason extends string = string,
+> = {
   /**
    * The storage adapter to use, either as a pre-constructed instance
    * or a factory function that receives the Hono context.
@@ -255,7 +263,7 @@ export type UsageManagerConfig = {
    * store: (c) => new D1Store({ db: c.env.DB })
    * ```
    */
-  store: UsageStore | UsageStoreFactory;
+  store: UsageStore<Reason> | UsageStoreFactory<E, Reason>;
   /** Default usage limit for new buckets (default: 1000) */
   defaultUsage?: number;
   /** Default window duration in milliseconds (default: 30 days) */
@@ -264,7 +272,7 @@ export type UsageManagerConfig = {
    * Function to resolve the owner ID from the Hono context.
    * This is called by the middleware to determine whose bucket to load.
    */
-  keyGenerator: (c: unknown) => string | Promise<string>;
+  keyGenerator: (c: Context<E>) => string | Promise<string>;
   /** Whether to auto-provision a bucket if one doesn't exist (default: true) */
   autoProvision?: boolean;
   /** Whether configured limits replace stored values when a window rolls over. */

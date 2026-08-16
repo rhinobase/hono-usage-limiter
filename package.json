@@ -15,7 +15,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "prepare": "is-ci || husky",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "hono",

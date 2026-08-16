@@ -2,37 +2,47 @@ import type {
   UsageBalanceInfo,
   UsageBucketProvisionOptions,
   UsageBucket,
+  UsageCreditResult,
   UsageStatus,
   UsageStore,
   UsageDeductResult,
   UsagePaginatedLedger,
+  UsageTryDeductResult,
 } from "./types";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Options accepted by the UsageManager constructor (store must be a resolved instance). */
-export type UsageManagerOptions = {
-  store: UsageStore;
+export type UsageManagerOptions<Reason extends string = string> = {
+  store: UsageStore<Reason>;
   defaultUsage?: number;
   defaultWindowDurationMs?: number;
   autoProvision?: boolean;
   reconcileLimit?: boolean;
 };
 
-export class UsageManager {
-  private store: UsageStore;
+export class UsageManager<Reason extends string = string> {
+  private store: UsageStore<Reason>;
   private defaultUsage: number;
   private defaultWindowDurationMs: number;
   private autoProvision: boolean;
+  private reconcileLimit: boolean;
   private bucket: UsageBucket | null = null;
   private ownerId: string;
 
-  constructor(ownerId: string, config: UsageManagerOptions) {
+  constructor(ownerId: string, config: UsageManagerOptions<Reason>) {
     this.ownerId = ownerId;
     this.store = config.store;
     this.defaultUsage = config.defaultUsage ?? 1000;
     this.defaultWindowDurationMs = config.defaultWindowDurationMs ?? THIRTY_DAYS_MS;
     this.autoProvision = config.autoProvision ?? true;
+    this.reconcileLimit = config.reconcileLimit ?? false;
+  }
+
+  private assertPositiveFiniteAmount(amount: number, operation: string): void {
+    if (amount <= 0 || !Number.isFinite(amount)) {
+      throw new Error(`${operation} amount must be a positive finite number`);
+    }
   }
 
   /**
@@ -54,15 +64,19 @@ export class UsageManager {
       });
     }
 
-    // Auto-refill: if the window has expired, reset the bucket
+    // Auto-refill: atomically advance an expired window.
     const windowEnd =
       this.bucket.windowStart + this.bucket.windowDurationMs;
     if (Date.now() >= windowEnd) {
-      this.bucket = await this.store.updateBucket(this.bucket.id, {
-        usageRemaining: this.bucket.usageLimit,
-        windowStart: Date.now(),
-        totalConsumed: 0,
-        updatedAt: Date.now(),
+      const now = Date.now();
+      this.bucket = await this.store.rolloverWindow(this.bucket.id, this.bucket.windowStart, {
+        windowStart: now,
+        usageLimit: this.reconcileLimit
+          ? this.defaultUsage
+          : this.bucket.usageLimit,
+        windowDurationMs: this.reconcileLimit
+          ? this.defaultWindowDurationMs
+          : this.bucket.windowDurationMs,
       });
     }
 
@@ -93,12 +107,10 @@ export class UsageManager {
    */
   async deduct(
     amount: number,
-    reason: string,
+    reason: Reason,
     metadata?: Record<string, unknown>,
-  ): Promise<UsageDeductResult> {
-    if (amount <= 0 || !Number.isFinite(amount)) {
-      throw new Error("Deduction amount must be a positive finite number");
-    }
+  ): Promise<UsageDeductResult<Reason>> {
+    this.assertPositiveFiniteAmount(amount, "Deduction");
 
     const bucket = await this.resolveBucket();
     const result = await this.store.deduct(
@@ -114,8 +126,70 @@ export class UsageManager {
       ...bucket,
       usageRemaining: result.remaining,
       totalConsumed: bucket.totalConsumed + amount,
-      lastConsumedAt: Date.now(),
-      updatedAt: Date.now(),
+      lastConsumedAt: result.entry.createdAt,
+      updatedAt: result.entry.createdAt,
+    };
+
+    return result;
+  }
+
+  /**
+   * Deduct usage only when the bucket has enough remaining balance.
+   */
+  async tryDeduct(
+    amount: number,
+    reason: Reason,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult<Reason>> {
+    this.assertPositiveFiniteAmount(amount, "Deduction");
+
+    const bucket = await this.resolveBucket();
+    const result = await this.store.tryDeduct(
+      bucket.id,
+      this.ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    this.bucket = {
+      ...bucket,
+      usageRemaining: result.remaining,
+      ...(result.success
+        ? {
+            totalConsumed: bucket.totalConsumed + amount,
+            lastConsumedAt: result.entry.createdAt,
+            updatedAt: result.entry.createdAt,
+          }
+        : {}),
+    };
+
+    return result;
+  }
+
+  /**
+   * Grant usage in the current window without changing consumed usage.
+   */
+  async credit(
+    amount: number,
+    reason: Reason,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult<Reason>> {
+    this.assertPositiveFiniteAmount(amount, "Credit");
+
+    const bucket = await this.resolveBucket();
+    const result = await this.store.credit(
+      bucket.id,
+      this.ownerId,
+      amount,
+      reason,
+      metadata,
+    );
+
+    this.bucket = {
+      ...bucket,
+      usageRemaining: result.remaining,
+      updatedAt: result.entry.createdAt,
     };
 
     return result;
@@ -144,7 +218,7 @@ export class UsageManager {
   async getHistory(
     cursor?: string,
     limit?: number,
-  ): Promise<UsagePaginatedLedger> {
+  ): Promise<UsagePaginatedLedger<Reason>> {
     const bucket = await this.resolveBucket();
     return this.store.getLedger(bucket.id, cursor, limit);
   }
@@ -179,7 +253,7 @@ export class UsageManager {
       return bucket;
     }
 
-    const updates: Parameters<UsageStore["updateBucket"]>[1] = {
+    const updates: Parameters<UsageStore<Reason>["updateBucket"]>[1] = {
       usageLimit: options.usageLimit,
       updatedAt: Date.now(),
     };
