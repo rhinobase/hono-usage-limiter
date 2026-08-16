@@ -16,6 +16,7 @@ export type UsageManagerOptions = {
   defaultUsage?: number;
   defaultWindowDurationMs?: number;
   autoProvision?: boolean;
+  reconcileLimit?: boolean;
 };
 
 export class UsageManager {
