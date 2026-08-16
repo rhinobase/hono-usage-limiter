@@ -21,7 +21,7 @@ export type UsageBucket = {
   updatedAt: number;
 };
 
-export type UsageLedgerEntry = {
+export type UsageLedgerEntry<Reason extends string = string> = {
   /** Unique identifier for this ledger entry */
   id: string;
   /** ID of the bucket this entry belongs to */
@@ -31,7 +31,7 @@ export type UsageLedgerEntry = {
   /** Number of usage units consumed (positive integer) */
   amount: number;
   /** Reason for the deduction (e.g., 'inference', 'embedding') */
-  reason: string;
+  reason: Reason;
   /** Optional metadata as a JSON-serializable object */
   metadata: Record<string, unknown> | null;
   /** Timestamp when this entry was created (epoch ms) */
@@ -62,19 +62,51 @@ export type UsageBalanceInfo = {
   resetsAt: string;
 };
 
-export type UsageDeductResult = {
+export type UsageDeductResult<Reason extends string = string> = {
   /** Whether the deduction was successful */
-  success: boolean;
+  success: true;
   /** Usage units remaining after deduction */
   remaining: number;
   /** The ledger entry created for this deduction */
-  entry: UsageLedgerEntry;
+  entry: UsageLedgerEntry<Reason>;
 };
 
-export type UsagePaginatedLedger = {
+export type UsageTryDeductResult<Reason extends string = string> =
+  | {
+      /** Whether the deduction was committed. */
+      success: true;
+      /** Usage units remaining after deduction. */
+      remaining: number;
+      /** The ledger entry created for this deduction. */
+      entry: UsageLedgerEntry<Reason>;
+    }
+  | {
+      /** Whether the deduction was committed. */
+      success: false;
+      /** Usage units remaining when the deduction was refused. */
+      remaining: number;
+      /** No ledger entry is created for an insufficient balance. */
+      entry: null;
+    };
+
+export type UsageCreditResult<Reason extends string = string> = {
+  /** Usage units remaining after the credit. */
+  remaining: number;
+  /** The negative ledger entry created for this credit. */
+  entry: UsageLedgerEntry<Reason>;
+};
+
+export type UsagePaginatedLedger<Reason extends string = string> = {
   /** Ledger entries for the current page */
-  entries: UsageLedgerEntry[];
+  entries: UsageLedgerEntry<Reason>[];
   /** Cursor for the next page, or null if no more entries */
+  nextCursor: string | null;
+};
+
+export type UsagePaginatedBuckets = {
+  /** Buckets for the current page. */
+  buckets: UsageBucket[];
+  /** Cursor for the next page, or null if no more entries. */
   nextCursor: string | null;
 };
 
@@ -85,11 +117,33 @@ export type UsageBucketProvisionOptions = {
   windowDurationMs: number;
 };
 
+export type UsageBucketUpdates = Partial<
+  Pick<
+    UsageBucket,
+    | "usageRemaining"
+    | "usageLimit"
+    | "windowStart"
+    | "windowDurationMs"
+    | "totalConsumed"
+    | "lastConsumedAt"
+    | "updatedAt"
+  >
+>;
+
+export type UsageRolloverOptions = {
+  /** Start timestamp for the next rolling window. */
+  windowStart: number;
+  /** Usage allowance for the next rolling window. */
+  usageLimit: number;
+  /** Duration of the next rolling window in milliseconds. */
+  windowDurationMs: number;
+};
+
 /**
  * Storage adapter interface for usage data.
  * Implement this interface to use any database backend.
  */
-export interface UsageStore {
+export interface UsageStore<Reason extends string = string> {
   /**
    * Get a usage bucket by owner ID.
    * Returns null if no bucket exists for this owner.
@@ -111,17 +165,7 @@ export interface UsageStore {
    */
   updateBucket(
     bucketId: string,
-    updates: Partial<
-      Pick<
-        UsageBucket,
-        | "usageRemaining"
-        | "usageLimit"
-        | "windowStart"
-        | "totalConsumed"
-        | "lastConsumedAt"
-        | "updatedAt"
-      >
-    >,
+    updates: UsageBucketUpdates,
   ): Promise<UsageBucket>;
 
   /**
@@ -133,9 +177,40 @@ export interface UsageStore {
     bucketId: string,
     ownerId: string,
     amount: number,
-    reason: string,
+    reason: Reason,
     metadata?: Record<string, unknown>,
-  ): Promise<UsageDeductResult>;
+  ): Promise<UsageDeductResult<Reason>>;
+
+  /**
+   * Atomically deduct usage only when enough balance remains.
+   */
+  tryDeduct(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: Reason,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageTryDeductResult<Reason>>;
+
+  /**
+   * Credit usage in the current window and create a negative ledger entry.
+   */
+  credit(
+    bucketId: string,
+    ownerId: string,
+    amount: number,
+    reason: Reason,
+    metadata?: Record<string, unknown>,
+  ): Promise<UsageCreditResult<Reason>>;
+
+  /**
+   * Advance an expired window only if it still starts at the expected time.
+   */
+  rolloverWindow(
+    bucketId: string,
+    expectedWindowStart: number,
+    options: UsageRolloverOptions,
+  ): Promise<UsageBucket>;
 
   /**
    * Get paginated ledger entries for a bucket.
@@ -145,7 +220,13 @@ export interface UsageStore {
     bucketId: string,
     cursor?: string,
     limit?: number,
-  ): Promise<UsagePaginatedLedger>;
+  ): Promise<UsagePaginatedLedger<Reason>>;
+
+  /** Reset all bucket balances to their configured limits. */
+  resetAll(): Promise<number>;
+
+  /** List usage buckets ordered by bucket ID. */
+  listBuckets(cursor?: string, limit?: number): Promise<UsagePaginatedBuckets>;
 }
 
 /**
@@ -186,4 +267,6 @@ export type UsageManagerConfig = {
   keyGenerator: (c: unknown) => string | Promise<string>;
   /** Whether to auto-provision a bucket if one doesn't exist (default: true) */
   autoProvision?: boolean;
+  /** Whether configured limits replace stored values when a window rolls over. */
+  reconcileLimit?: boolean;
 };
