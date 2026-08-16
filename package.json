@@ -58,6 +58,16 @@
         "default": "./dist/memory.cjs"
       }
     },
+    "./cache": {
+      "import": {
+        "types": "./dist/cache.d.ts",
+        "default": "./dist/cache.js"
+      },
+      "require": {
+        "types": "./dist/cache.d.cts",
+        "default": "./dist/cache.cjs"
+      }
+    },
     "./unstorage": {
       "import": {
         "types": "./dist/unstorage.d.ts",
