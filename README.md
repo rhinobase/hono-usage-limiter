@@ -144,6 +144,29 @@ const store = new D1Store({
 });
 ```
 
+### Request-scoped stores
+
+Pass a store factory when an adapter depends on a binding from the Hono context.
+The factory runs for each request, so it can create a `D1Store` from a
+Cloudflare Worker's `DB` binding.
+
+```typescript
+import { Hono } from "hono";
+import { usageManager } from "hono-usage-limiter";
+import { D1Store } from "hono-usage-limiter/d1";
+
+type Bindings = { DB: D1Database };
+
+const app = new Hono<{ Bindings: Bindings }>();
+
+app.use(
+  usageManager<{ Bindings: Bindings }>({
+    store: (c) => new D1Store({ db: c.env.DB }),
+    keyGenerator: (c) => c.req.header("x-user-id") ?? "anonymous",
+  }),
+);
+```
+
 ### Custom Store
 
 Implement the `UsageStore` interface to use any database:
@@ -181,7 +204,7 @@ Hono middleware that injects a `UsageManager` onto the context as `c.get("usage"
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `store` | `UsageStore` | *required* | Storage adapter |
+| `store` | `UsageStore \| (c) => UsageStore` | *required* | Storage adapter or request-scoped store factory |
 | `keyGenerator` | `(c) => string` | *required* | Resolves owner ID from context |
 | `defaultUsage` | `number` | `1000` | Default usage limit for new buckets |
 | `defaultWindowDurationMs` | `number` | `2592000000` (30 days) | Default rolling window duration |
